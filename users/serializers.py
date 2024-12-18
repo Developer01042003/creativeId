@@ -37,7 +37,7 @@ import io
 class UserKYCSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserKYC
-        fields = ['contact_number', 'address', 'country', 'selfie']
+        fields = ['full_name','contact_number', 'address', 'country', 'selfie']
 
     def validate_selfie(self, value):
         try:
