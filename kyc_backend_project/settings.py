@@ -66,14 +66,11 @@ WSGI_APPLICATION = 'kyc_backend_project.wsgi.application'
 # Database configuration for Render
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DATABASE_NAME', 'your_db_name'),
-        'USER': os.environ.get('DATABASE_USER', 'your_db_user'),
-        'PASSWORD': os.environ.get('DATABASE_PASSWORD', 'your_db_password'),
-        'HOST': os.environ.get('DATABASE_HOST', 'localhost'),
-        'PORT': os.environ.get('DATABASE_PORT', '5432'),
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',  # This will create a file named db.sqlite3 in the project root
     }
 }
+
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
