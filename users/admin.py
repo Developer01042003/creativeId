@@ -29,7 +29,7 @@ class CustomUserAdmin(UserAdmin):
 # Registering UserKYC model with the custom admin interface
 
 class UserKYCAdmin(admin.ModelAdmin):
-    list_display = ('contact_number', 'country', 'display_selfie', 'image_hash')
+    list_display = ('contact_number', 'country', 'display_selfie', 'image_hash','full_name')
     search_fields = ('contact_number', 'country', 'image_hash')
     list_filter = ('country',)
     readonly_fields = ('image_hash',)
@@ -42,7 +42,8 @@ class UserKYCAdmin(admin.ModelAdmin):
     display_selfie.short_description = "Selfie Preview"
 
 
-@admin.register(UserKYC, UserKYCAdmin)
 
 # Register models with Django admin
 admin.site.register(CustomUser, CustomUserAdmin)
+admin.site.register(UserKYC, UserKYCAdmin)
+
