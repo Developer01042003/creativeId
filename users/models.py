@@ -38,7 +38,7 @@ class CustomUser(AbstractUser):
 
 class UserKYC(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
-    fullname = models.CharField(max_length=100,default="none")  # Added field for first name
+    full_name = models.CharField(max_length=100,default="none")  # Added field for first name
      # Added field for last name
     contact_number = models.CharField(max_length=15)
     address = models.TextField()
