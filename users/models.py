@@ -44,6 +44,7 @@ class UserKYC(models.Model):
     address = models.TextField()
     country = models.CharField(max_length=50)
     selfie = models.ImageField(upload_to="selfies/")
+    face_hash = models.CharField(max_length=64, null=True, blank=True)  # Add face_hash to store the cropped face hash
     image_hash = models.CharField(max_length=32, unique=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
