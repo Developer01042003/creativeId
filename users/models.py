@@ -51,9 +51,6 @@ class UserKYC(models.Model):
     def __str__(self):
         return f"KYC for {self.full_name} ({self.user.email})"
 
-    @property
-    def full_name(self):
-        return f"{self.full_name}"
 
     class Meta:
         verbose_name = "User KYC"
