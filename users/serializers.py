@@ -24,15 +24,15 @@ class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
+import hashlib
 import cv2
 import numpy as np
+from PIL import Image, ImageEnhance
 from rest_framework import serializers
 from .models import UserKYC
-import hashlib
 import io
-from PIL import Image, ImageEnhance
-import logging
 from django.core.files.uploadedfile import InMemoryUploadedFile
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -43,64 +43,64 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
     def validate_selfie(self, value):
         try:
-            # Read image file and check for None
+            # Step 1: Read and process the image
             if isinstance(value, InMemoryUploadedFile):
                 image_bytes = value.read()
                 image = Image.open(io.BytesIO(image_bytes))
             else:
                 raise serializers.ValidationError("Invalid image format")
             
-            # Convert image to numpy array for OpenCV processing
             img = np.array(image)
             if img is None:
                 raise serializers.ValidationError("Unable to process image")
 
-            # 1. Check image dimensions
+            # Step 2: Perform all validations on the image
+            # Resolution check
             height, width = img.shape[:2]
             if width < 200 or height < 200:
                 raise serializers.ValidationError("Image resolution too low. Minimum 200x200 pixels required.")
 
-            # 2. Face Detection
+            # Face detection
             face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-
             if len(faces) == 0:
                 raise serializers.ValidationError("No face detected in the image")
             if len(faces) > 1:
                 raise serializers.ValidationError("Multiple faces detected. Please submit a selfie with only your face")
 
-            # 3. Blur Detection
+            # Blur detection
             laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
             if laplacian_var < 100:  # Threshold for blur detection
                 raise serializers.ValidationError("Image is too blurry")
 
-            # 4. Brightness Check
+            # Brightness check
             average_brightness = np.mean(gray)
             if average_brightness < 40:  # Too dark
                 raise serializers.ValidationError("Image is too dark")
             if average_brightness > 240:  # Too bright
                 raise serializers.ValidationError("Image is too bright")
 
-            # 5. Check for Mirror or Fake Image (Reflection Detection)
+            # Fake image check
             if self.is_mirror_or_fake(img):
                 raise serializers.ValidationError("The image appears to be a screen capture or mirror image. Please submit a genuine selfie.")
 
-            # Save image metadata and process image further if required
-            image_metadata = self._process_image(image, value)
-
-            # Compress and optimize the image before saving
+            # Step 3: Process and compress the image before saving
             optimized_image = self._compress_image(image)
 
-            # Check for duplicate using image hash
+            # Step 4: Generate the image hash
             image_hash = self._generate_image_hash(optimized_image)
+
+            # Step 5: Check for duplicate image hash in the database
             if UserKYC.objects.filter(image_hash=image_hash).exists():
                 raise serializers.ValidationError("This image has already been used. Please upload a different image.")
 
-            # Return the processed image
+            # Step 6: Save image hash and metadata
+            image_metadata = self._process_image(image, value)
             value.image_hash = image_hash
             value.metadata = image_metadata
 
+            # Step 7: Save the processed image
             return self._save_image(optimized_image, value)
 
         except Exception as e:
@@ -109,9 +109,6 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
     def is_mirror_or_fake(self, img):
         # Check if the image has reflective artifacts or unusual pixel patterns that suggest a screen capture
-        # This function can be extended with more sophisticated analysis, for example, detecting screen edges or distortion
-        
-        # Example: Check if the image has a border typical of a screen display or reflection
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, 100, 200)
 
@@ -188,4 +185,3 @@ class UserKYCSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
         return instance
-
