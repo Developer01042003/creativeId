@@ -34,89 +34,133 @@ import os
 from django.core.files.uploadedfile import InMemoryUploadedFile
 import io
 
+from rest_framework import serializers
+from .models import UserKYC
+import cv2
+import numpy as np
+import hashlib
+import os
+from django.core.files.uploadedfile import InMemoryUploadedFile
+from PIL import Image, ImageEnhance
+import io
+import logging
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
 class UserKYCSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserKYC
-        fields = ['full_name','contact_number', 'address', 'country', 'selfie']
+        fields = ['full_name', 'contact_number', 'address', 'country', 'selfie']
 
     def validate_selfie(self, value):
         try:
             # Read image file
             if isinstance(value, InMemoryUploadedFile):
                 image_bytes = value.read()
-                # Convert to numpy array
-                nparr = np.frombuffer(image_bytes, np.uint8)
-                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                image = Image.open(io.BytesIO(image_bytes))
             else:
                 raise serializers.ValidationError("Invalid image format")
 
-            if img is None:
-                raise serializers.ValidationError("Unable to process image")
+            # Convert to RGB and resize the image
+            image = image.convert("RGB")
+            image = self._resize_image(image)
 
-            # 1. Check image dimensions
-            height, width = img.shape[:2]
-            if width < 200 or height < 200:
-                raise serializers.ValidationError("Image resolution too low. Minimum 200x200 pixels required.")
+            # Save the image metadata to later use for duplicate detection
+            image_metadata = self._process_image(image, value)
 
-            # 2. Face Detection
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            # Compress and optimize the image
+            optimized_image = self._compress_image(image)
 
-            if len(faces) == 0:
-                raise serializers.ValidationError("No face detected in the image")
-            if len(faces) > 1:
-                raise serializers.ValidationError("Multiple faces detected. Please submit a selfie with only your face")
+            # Calculate image hash (SHA-256)
+            image_hash = self._generate_image_hash(optimized_image)
 
-            # 3. Blur Detection
-            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-            if laplacian_var < 100:  # Threshold for blur detection
-                raise serializers.ValidationError("Image is too blurry")
-
-            # 4. Brightness Check
-            average_brightness = np.mean(gray)
-            if average_brightness < 40:  # Too dark
-                raise serializers.ValidationError("Image is too dark")
-            if average_brightness > 240:  # Too bright
-                raise serializers.ValidationError("Image is too bright")
-
-            # 5. Image Size Check
-            if value.size > 5 * 1024 * 1024:  # 5MB limit
-                raise serializers.ValidationError("Image size too large. Maximum 5MB allowed.")
-
-            # 6. Duplicate Check using MD5 hash
-            value.seek(0)  # Reset file pointer
-            image_hash = hashlib.md5(value.read()).hexdigest()
+            # Check for duplicate using the image hash
             if UserKYC.objects.filter(image_hash=image_hash).exists():
-                raise serializers.ValidationError("This image has already been used")
+                raise serializers.ValidationError("This image has already been used. Please upload a different image.")
 
-            # Store hash for saving
+            # Store the image hash and metadata
             value.image_hash = image_hash
+            value.metadata = image_metadata
 
-            # Reset file pointer for saving
-            value.seek(0)
-            return value
+            return self._save_image(optimized_image, value)
 
         except Exception as e:
+            logger.error(f"Error processing image: {str(e)}")
             raise serializers.ValidationError(f"Error processing image: {str(e)}")
 
+    def _resize_image(self, image):
+        # Resize the image to ensure it's not too large
+        max_size = (800, 800)  # Max size of 800x800 pixels
+        image.thumbnail(max_size, Image.ANTIALIAS)
+        return image
+
+    def _process_image(self, image, value):
+        # Perform quality enhancement (e.g., sharpen image)
+        enhancer = ImageEnhance.Sharpness(image)
+        image = enhancer.enhance(2.0)  # Double the sharpness
+        image = self._convert_to_grayscale(image)
+
+        # Image dimensions and compression check
+        width, height = image.size
+        if width < 200 or height < 200:
+            raise serializers.ValidationError("Image resolution too low. Minimum 200x200 pixels required.")
+
+        return {
+            'width': width,
+            'height': height,
+            'format': value.content_type,
+        }
+
+    def _convert_to_grayscale(self, image):
+        return image.convert("L")  # Convert to grayscale for easier processing
+
+    def _compress_image(self, image):
+        # Compress the image to reduce size (JPEG is efficient)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=85)  # Adjust quality to control compression level
+        buffer.seek(0)
+        return buffer
+
+    def _generate_image_hash(self, optimized_image):
+        # Use SHA-256 for better hash collision resistance
+        image_hash = hashlib.sha256(optimized_image.read()).hexdigest()
+        optimized_image.seek(0)  # Reset file pointer after reading
+        return image_hash
+
+    def _save_image(self, optimized_image, value):
+        # Save the optimized image back to the uploaded file object
+        value.seek(0)  # Reset file pointer
+        value.write(optimized_image.read())
+        value.seek(0)  # Reset file pointer again for saving
+        return value
+
     def create(self, validated_data):
-        # Store the hash if it exists
-        image_hash = getattr(validated_data['selfie'], 'image_hash', None)
+        image_hash = validated_data.get('selfie').image_hash
+
+        # Check again for duplicates before saving
+        if UserKYC.objects.filter(image_hash=image_hash).exists():
+            raise serializers.ValidationError("This image has already been used. Please upload a different image.")
+
+        # Create and save the UserKYC instance
         kyc = UserKYC.objects.create(**validated_data)
-        if image_hash:
-            kyc.image_hash = image_hash
-            kyc.save()
+        kyc.image_hash = image_hash
+        kyc.save()
+
         return kyc
 
     def update(self, instance, validated_data):
         if 'selfie' in validated_data:
-            # Store the hash if it exists
-            image_hash = getattr(validated_data['selfie'], 'image_hash', None)
-            if image_hash:
-                instance.image_hash = image_hash
-        
+            image_hash = validated_data['selfie'].image_hash
+            # Check again for duplicates before updating
+            if UserKYC.objects.filter(image_hash=image_hash).exists():
+                raise serializers.ValidationError("This image has already been used. Please upload a different image.")
+            
+            # Update the hash if the image is new
+            instance.image_hash = image_hash
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
         return instance
+
