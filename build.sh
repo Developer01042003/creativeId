@@ -15,10 +15,10 @@ mkdir -p static staticfiles media
 
 
 # Make fresh migrations
-python manage.py makemigrations
+python manage.py makemigrations  --noinput
 
 # Apply migrations
-python manage.py migrate
+python manage.py migrate  --noinput
 
 # Collect static files
 python manage.py collectstatic --noinput --clear
