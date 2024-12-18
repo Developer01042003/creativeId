@@ -24,27 +24,15 @@ class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
-# serializers.py
-from rest_framework import serializers
-from .models import UserKYC
 import cv2
 import numpy as np
+from rest_framework import serializers
+from .models import UserKYC
 import hashlib
-import os
-from django.core.files.uploadedfile import InMemoryUploadedFile
 import io
-
-from rest_framework import serializers
-from .models import UserKYC
-import cv2
-import numpy as np
-import hashlib
-import os
-from django.core.files.uploadedfile import InMemoryUploadedFile
 from PIL import Image, ImageEnhance
-import io
 import logging
-from django.conf import settings
+from django.core.files.uploadedfile import InMemoryUploadedFile
 
 logger = logging.getLogger(__name__)
 
@@ -55,31 +43,61 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
     def validate_selfie(self, value):
         try:
-            # Read image file
+            # Read image file and check for None
             if isinstance(value, InMemoryUploadedFile):
                 image_bytes = value.read()
                 image = Image.open(io.BytesIO(image_bytes))
             else:
                 raise serializers.ValidationError("Invalid image format")
+            
+            # Convert image to numpy array for OpenCV processing
+            img = np.array(image)
+            if img is None:
+                raise serializers.ValidationError("Unable to process image")
 
-            # Convert to RGB and resize the image
-            image = image.convert("RGB")
-            image = self._resize_image(image)
+            # 1. Check image dimensions
+            height, width = img.shape[:2]
+            if width < 200 or height < 200:
+                raise serializers.ValidationError("Image resolution too low. Minimum 200x200 pixels required.")
 
-            # Save the image metadata to later use for duplicate detection
+            # 2. Face Detection
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+
+            if len(faces) == 0:
+                raise serializers.ValidationError("No face detected in the image")
+            if len(faces) > 1:
+                raise serializers.ValidationError("Multiple faces detected. Please submit a selfie with only your face")
+
+            # 3. Blur Detection
+            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            if laplacian_var < 100:  # Threshold for blur detection
+                raise serializers.ValidationError("Image is too blurry")
+
+            # 4. Brightness Check
+            average_brightness = np.mean(gray)
+            if average_brightness < 40:  # Too dark
+                raise serializers.ValidationError("Image is too dark")
+            if average_brightness > 240:  # Too bright
+                raise serializers.ValidationError("Image is too bright")
+
+            # 5. Check for Mirror or Fake Image (Reflection Detection)
+            if self.is_mirror_or_fake(img):
+                raise serializers.ValidationError("The image appears to be a screen capture or mirror image. Please submit a genuine selfie.")
+
+            # Save image metadata and process image further if required
             image_metadata = self._process_image(image, value)
 
-            # Compress and optimize the image
+            # Compress and optimize the image before saving
             optimized_image = self._compress_image(image)
 
-            # Calculate image hash (SHA-256)
+            # Check for duplicate using image hash
             image_hash = self._generate_image_hash(optimized_image)
-
-            # Check for duplicate using the image hash
             if UserKYC.objects.filter(image_hash=image_hash).exists():
                 raise serializers.ValidationError("This image has already been used. Please upload a different image.")
 
-            # Store the image hash and metadata
+            # Return the processed image
             value.image_hash = image_hash
             value.metadata = image_metadata
 
@@ -89,19 +107,29 @@ class UserKYCSerializer(serializers.ModelSerializer):
             logger.error(f"Error processing image: {str(e)}")
             raise serializers.ValidationError(f"Error processing image: {str(e)}")
 
-    def _resize_image(self, image):
-        # Resize the image to ensure it's not too large
-        max_size = (800, 800)  # Max size of 800x800 pixels
-        image.thumbnail(max_size, Image.ANTIALIAS)
-        return image
+    def is_mirror_or_fake(self, img):
+        # Check if the image has reflective artifacts or unusual pixel patterns that suggest a screen capture
+        # This function can be extended with more sophisticated analysis, for example, detecting screen edges or distortion
+        
+        # Example: Check if the image has a border typical of a screen display or reflection
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 100, 200)
+
+        # Detect horizontal or vertical lines which might suggest a reflection or screen capture
+        horizontal_lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=200, maxLineGap=20)
+        vertical_lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=200, maxLineGap=20)
+
+        if horizontal_lines is not None or vertical_lines is not None:
+            return True  # Likely to be a screen capture or fake image
+
+        return False
 
     def _process_image(self, image, value):
-        # Perform quality enhancement (e.g., sharpen image)
+        # Perform image quality enhancement, e.g., sharpening
         enhancer = ImageEnhance.Sharpness(image)
         image = enhancer.enhance(2.0)  # Double the sharpness
-        image = self._convert_to_grayscale(image)
 
-        # Image dimensions and compression check
+        # Check image dimensions and compression
         width, height = image.size
         if width < 200 or height < 200:
             raise serializers.ValidationError("Image resolution too low. Minimum 200x200 pixels required.")
@@ -112,18 +140,15 @@ class UserKYCSerializer(serializers.ModelSerializer):
             'format': value.content_type,
         }
 
-    def _convert_to_grayscale(self, image):
-        return image.convert("L")  # Convert to grayscale for easier processing
-
     def _compress_image(self, image):
-        # Compress the image to reduce size (JPEG is efficient)
+        # Compress image to reduce size
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=85)  # Adjust quality to control compression level
         buffer.seek(0)
         return buffer
 
     def _generate_image_hash(self, optimized_image):
-        # Use SHA-256 for better hash collision resistance
+        # Generate SHA-256 hash of the image for duplication check
         image_hash = hashlib.sha256(optimized_image.read()).hexdigest()
         optimized_image.seek(0)  # Reset file pointer after reading
         return image_hash
@@ -138,7 +163,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         image_hash = validated_data.get('selfie').image_hash
 
-        # Check again for duplicates before saving
+        # Check for duplicates before saving
         if UserKYC.objects.filter(image_hash=image_hash).exists():
             raise serializers.ValidationError("This image has already been used. Please upload a different image.")
 
