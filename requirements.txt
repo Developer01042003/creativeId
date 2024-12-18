@@ -10,7 +10,7 @@ numpy==2.2.0
 opencv-python==4.10.0.84
 opencv-python-headless==4.10.0.84
 packaging==24.2
-pillow==11.0.0
+pillow
 psycopg2-binary==2.9.10
 PyJWT==1.7.1
 sqlparse==0.5.3
