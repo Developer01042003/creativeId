@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# exit on error
+# Exit on error
 set -o errexit
+set -o nounset  # To exit on unset variables
 
 # Upgrade pip
 python -m pip install --upgrade pip
@@ -10,34 +11,26 @@ pip install -r requirements.txt
 
 # Create necessary directories
 mkdir -p static staticfiles media
-touch static/.gitkeep media/.gitkeep
 
-# Clean up existing migrations
-find . -path "*/migrations/*.py" -not -name "__init__.py" -delete
-find . -path "*/migrations/*.pyc" -delete
 
-# Create migration directories
-mkdir -p users/migrations
-touch users/migrations/__init__.py
 
 # Make fresh migrations
-
 python manage.py makemigrations
 
 # Apply migrations
-
 python manage.py migrate
 
 # Collect static files
 python manage.py collectstatic --noinput --clear
 
-# Create superuser
-DJANGO_SUPERUSER_EMAIL=${DJANGO_SUPERUSER_EMAIL:-"admin@example.com"}
-DJANGO_SUPERUSER_USERNAME=${DJANGO_SUPERUSER_USERNAME:-"admin"}
-DJANGO_SUPERUSER_PASSWORD=${DJANGO_SUPERUSER_PASSWORD:-"adminpassword"}
+# Create superuser (ensure no input errors with default or env variable overrides)
+DJANGO_SUPERUSER_EMAIL="${DJANGO_SUPERUSER_EMAIL:-admin@example.com}"
+DJANGO_SUPERUSER_USERNAME="${DJANGO_SUPERUSER_USERNAME:-admin}"
+DJANGO_SUPERUSER_PASSWORD="${DJANGO_SUPERUSER_PASSWORD:-adminpassword}"
 
+# Avoid creating superuser if the username already exists
 python manage.py createsuperuser --noinput \
-    --username $DJANGO_SUPERUSER_USERNAME \
-    --email $DJANGO_SUPERUSER_EMAIL || true
+    --username "$DJANGO_SUPERUSER_USERNAME" \
+    --email "$DJANGO_SUPERUSER_EMAIL" || echo "Superuser creation skipped due to existing username."
 
 echo "Build completed successfully!"
