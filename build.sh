@@ -34,8 +34,8 @@ python manage.py createsuperuser --noinput \
     --username $DJANGO_SUPERUSER_USERNAME \
     --email $DJANGO_SUPERUSER_EMAIL || true
 
-# Optional: Collect static files if you're serving static files
-# echo "Collecting static files..."
-# python manage.py collectstatic --noinput
+# Collect static files
+echo "Collecting static files..."
+python manage.py collectstatic --noinput
 
 echo "Build script completed successfully!"
