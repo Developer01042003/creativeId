@@ -12,6 +12,7 @@ opencv-python-headless==4.10.0.84
 packaging==24.2
 pillow
 mtcnn
+imagehash
 psycopg2-binary==2.9.10
 PyJWT==1.7.1
 sqlparse==0.5.3
