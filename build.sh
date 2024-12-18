@@ -21,11 +21,11 @@ mkdir -p users/migrations
 touch users/migrations/__init__.py
 
 # Make fresh migrations
-python manage.py makemigrations users
+
 python manage.py makemigrations
 
 # Apply migrations
-python manage.py migrate users
+
 python manage.py migrate
 
 # Collect static files
