@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 class UserKYCSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserKYC
-        fields = ['user', 'full_name', 'contact_number', 'address', 'country', 'selfie']
+        fields = ['full_name', 'contact_number', 'address', 'country', 'selfie']
 
     def validate_selfie(self, value):
         try:
