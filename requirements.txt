@@ -13,11 +13,12 @@ packaging==24.2
 pillow
 boto3
 django-storages
-tensorflow
+exifread
 mtcnn
 tf-keras
 deepface
 imagehash
+python-magic
 psycopg2-binary==2.9.10
 PyJWT==1.7.1
 sqlparse==0.5.3
