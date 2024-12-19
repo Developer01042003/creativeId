@@ -217,18 +217,51 @@ class UserKYCSerializer(serializers.ModelSerializer):
             return 0.5
 
 def _check_duplicate_faces(self, image_bytes, current_user_id=None):
+    try:
+        # Try to create collection if it doesn't exist
         try:
-            # Try to create collection if it doesn't exist
-            try:
-                rekognition_client.create_collection(CollectionId='user_faces_collection')
-                logger.info("Face collection created or already exists")
-            except rekognition_client.exceptions.ResourceAlreadyExistsException:
-                pass
-            except Exception as e:
-                logger.error(f"Error with collection: {str(e)}")
-                raise serializers.ValidationError("Error initializing face detection system")
+            rekognition_client.create_collection(CollectionId='user_faces_collection')
+            logger.info("Face collection created or already exists")
+        except rekognition_client.exceptions.ResourceAlreadyExistsException:
+            pass
+        except Exception as e:
+            logger.error(f"Error with collection: {str(e)}")
+            raise serializers.ValidationError("Error initializing face detection system")
 
-            # Search for face in collection
+        # Get all objects from S3 bucket
+        try:
+            s3_objects = s3_client.list_objects_v2(Bucket=S3_BUCKET_NAME)
+            
+            # Compare with each image in S3
+            for obj in s3_objects.get('Contents', []):
+                if not obj['Key'].startswith('selfies/'):
+                    continue
+                
+                try:
+                    compare_response = rekognition_client.compare_faces(
+                        SourceImage={'Bytes': image_bytes},
+                        TargetImage={
+                            'S3Object': {
+                                'Bucket': S3_BUCKET_NAME,
+                                'Name': obj['Key']
+                            }
+                        },
+                        SimilarityThreshold=90
+                    )
+                    
+                    if compare_response.get('FaceMatches'):
+                        similarity = compare_response['FaceMatches'][0]['Similarity']
+                        logger.warning(f"Duplicate face found in S3 with similarity: {similarity}%")
+                        return True, "This face matches an existing user's verification photo."
+                        
+                except rekognition_client.exceptions.InvalidParameterException:
+                    logger.warning(f"No face found in image: {obj['Key']}")
+                    continue
+                except Exception as e:
+                    logger.error(f"Error comparing faces with {obj['Key']}: {str(e)}")
+                    continue
+
+            # If no matches found in S3, check collection as backup
             try:
                 search_response = rekognition_client.search_faces_by_image(
                     CollectionId='user_faces_collection',
@@ -238,44 +271,28 @@ def _check_duplicate_faces(self, image_bytes, current_user_id=None):
                 )
                 
                 if search_response.get('FaceMatches'):
-                    logger.warning("Duplicate face found in collection")
+                    similarity = search_response['FaceMatches'][0]['Similarity']
+                    logger.warning(f"Duplicate face found in collection with similarity: {similarity}%")
                     return True, "This face has already been registered in our system."
                     
             except rekognition_client.exceptions.InvalidParameterException:
-                logger.warning("No faces found during duplicate check")
+                logger.warning("No faces found during collection check")
                 pass
-
-            # Compare with existing images
-            existing_kycs = UserKYC.objects.exclude(user_id=current_user_id)
-            for existing_kyc in existing_kycs:
-                if not existing_kyc.s3_image_url:
-                    continue
-                    
-                try:
-                    compare_response = rekognition_client.compare_faces(
-                        SourceImage={'Bytes': image_bytes},
-                        TargetImage={'S3Object': {
-                            'Bucket': S3_BUCKET_NAME,
-                            'Name': existing_kyc.s3_image_url
-                        }},
-                        SimilarityThreshold=90
-                    )
-                    
-                    if compare_response.get('FaceMatches'):
-                        logger.warning("Duplicate face found in direct comparison")
-                        return True, "This face matches an existing user's verification photo."
-                        
-                except Exception as e:
-                    logger.error(f"Error comparing faces: {str(e)}")
-                    continue
+            except Exception as e:
+                logger.error(f"Error searching in collection: {str(e)}")
+                pass
             
-            return False
+            return False, ""
             
-        except serializers.ValidationError:
-            raise
         except Exception as e:
-            logger.error(f"Error checking duplicate faces: {str(e)}")
-            raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
+            logger.error(f"Error listing S3 objects: {str(e)}")
+            raise serializers.ValidationError("Error accessing image storage system")
+            
+    except serializers.ValidationError:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking duplicate faces: {str(e)}")
+        raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
 def validate_selfie(self, value):
     try:
