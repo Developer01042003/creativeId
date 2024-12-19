@@ -104,65 +104,161 @@ class UserKYCSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Error analyzing face details. Please try again with a clearer photo.")
 
     def _check_duplicate_faces(self, image_bytes, current_user_id=None):
+    try:
+        # Step 1: Initialize Collection with Error Handling
         try:
-            # Try to create collection if it doesn't exist
-            try:
-                rekognition_client.create_collection(CollectionId='user_faces_collection')
-                logger.info("Face collection created or already exists")
-            except rekognition_client.exceptions.ResourceAlreadyExistsException:
-                pass
-            except Exception as e:
-                logger.error(f"Error with collection: {str(e)}")
-                raise serializers.ValidationError("Error initializing face detection system")
+            collection_response = rekognition_client.create_collection(
+                CollectionId='user_faces_collection',
+                Tags={
+                    'Environment': 'Production',
+                    'Purpose': 'KYC-Verification'
+                }
+            )
+            logger.info(f"Collection status: {collection_response['StatusCode']}")
+        except rekognition_client.exceptions.ResourceAlreadyExistsException:
+            logger.info("Using existing face collection")
+        except Exception as e:
+            logger.error(f"Collection initialization error: {str(e)}")
+            raise serializers.ValidationError("System initialization error. Please try again.")
 
-            # Search for face in collection
+        # Step 2: Enhanced Face Quality Pre-check
+        face_analysis = rekognition_client.detect_faces(
+            Image={'Bytes': image_bytes},
+            Attributes=['QUALITY', 'POSE']
+        )
+
+        if not face_analysis.get('FaceDetails'):
+            raise serializers.ValidationError("No clear face detected. Please provide a better quality photo.")
+
+        face_quality = face_analysis['FaceDetails'][0].get('Quality', {})
+        if face_quality.get('Brightness', 0) < 40 or face_quality.get('Sharpness', 0) < 40:
+            raise serializers.ValidationError("Poor image quality. Please provide a clearer photo.")
+
+        # Step 3: Advanced Similarity Search in Collection
+        try:
+            search_response = rekognition_client.search_faces_by_image(
+                CollectionId='user_faces_collection',
+                Image={'Bytes': image_bytes},
+                MaxFaces=5,  # Increased to check multiple potential matches
+                FaceMatchThreshold=85  # Slightly lower threshold to catch near-matches
+            )
+
+            if search_response.get('FaceMatches'):
+                matches = search_response['FaceMatches']
+                # Analyze all matches
+                for match in matches:
+                    similarity = match.get('Similarity', 0)
+                    face_id = match.get('Face', {}).get('FaceId')
+                    
+                    logger.warning(f"Face match found - Similarity: {similarity}%, FaceId: {face_id}")
+                    
+                    if similarity >= 90:
+                        return True, "This face has already been registered in our system."
+                    elif similarity >= 85:
+                        logger.warning(f"Near-duplicate face detected with {similarity}% similarity")
+                        return True, "A very similar face is already registered in our system."
+
+        except rekognition_client.exceptions.InvalidParameterException as e:
+            logger.warning(f"Face search parameter error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Face search error: {str(e)}")
+            raise serializers.ValidationError("Error during face verification. Please try again.")
+
+        # Step 4: Enhanced Direct Comparison with Existing Images
+        existing_kycs = UserKYC.objects.exclude(user_id=current_user_id).filter(
+            face_confidence__gte=90  # Only compare with high-confidence existing images
+        )
+
+        for existing_kyc in existing_kycs:
+            if not existing_kyc.s3_image_url:
+                continue
+
             try:
-                search_response = rekognition_client.search_faces_by_image(
-                    CollectionId='user_faces_collection',
-                    Image={'Bytes': image_bytes},
-                    MaxFaces=1,
-                    FaceMatchThreshold=90
+                compare_response = rekognition_client.compare_faces(
+                    SourceImage={'Bytes': image_bytes},
+                    TargetImage={'S3Object': {
+                        'Bucket': S3_BUCKET_NAME,
+                        'Name': existing_kyc.s3_image_url
+                    }},
+                    SimilarityThreshold=85,  # Catch near-matches
+                    QualityFilter='HIGH'
                 )
 
-                if search_response.get('FaceMatches'):
-                    logger.warning("Duplicate face found in collection")
-                    return True, "This face has already been registered in our system."
+                if compare_response.get('FaceMatches'):
+                    for match in compare_response['FaceMatches']:
+                        similarity = match.get('Similarity', 0)
+                        
+                        # Log detailed match information
+                        logger.warning(
+                            f"Direct comparison match found - "
+                            f"Similarity: {similarity}%, "
+                            f"User ID: {existing_kyc.user_id}, "
+                            f"Confidence: {match.get('Face', {}).get('Confidence')}%"
+                        )
 
-            except rekognition_client.exceptions.InvalidParameterException:
-                logger.warning("No faces found during duplicate check")
-                pass
+                        if similarity >= 90:
+                            # Record the attempt for security monitoring
+                            self._record_duplicate_attempt(
+                                current_user_id, 
+                                existing_kyc.user_id, 
+                                similarity
+                            )
+                            return True, "This face matches an existing user's verification photo."
+                        elif similarity >= 85:
+                            return True, "A very similar face is already registered in our system."
 
-            # Compare with existing images
-            existing_kycs = UserKYC.objects.exclude(user_id=current_user_id)
-            for existing_kyc in existing_kycs:
-                if not existing_kyc.s3_image_url:
-                    continue
+            except Exception as e:
+                logger.error(f"Face comparison error: {str(e)}")
+                continue
 
-                try:
-                    compare_response = rekognition_client.compare_faces(
-                        SourceImage={'Bytes': image_bytes},
-                        TargetImage={'S3Object': {
-                            'Bucket': S3_BUCKET_NAME,
-                            'Name': existing_kyc.s3_image_url
-                        }},
-                        SimilarityThreshold=90
-                    )
+        # Step 5: Final Security Check
+        if self._check_suspicious_activity(current_user_id):
+            raise serializers.ValidationError(
+                "Multiple verification attempts detected. Please try again later."
+            )
 
-                    if compare_response.get('FaceMatches'):
-                        logger.warning("Duplicate face found in direct comparison")
-                        return True, "This face matches an existing user's verification photo."
+        return False, ""
 
-                except Exception as e:
-                    logger.error(f"Error comparing faces: {str(e)}")
-                    continue
+    except serializers.ValidationError:
+        raise
+    except Exception as e:
+        logger.error(f"Duplicate check error: {str(e)}")
+        raise serializers.ValidationError(
+            "Unable to complete face verification. Please try again later."
+        )
 
-            return False, ""
+def _record_duplicate_attempt(self, current_user_id, matched_user_id, similarity):
+    """Record duplicate face detection attempts for security monitoring"""
+    try:
+        cache_key = f'duplicate_attempts_{current_user_id}'
+        attempts = cache.get(cache_key, [])
+        attempts.append({
+            'timestamp': datetime.now().isoformat(),
+            'matched_user_id': matched_user_id,
+            'similarity': similarity
+        })
+        cache.set(cache_key, attempts, timeout=86400)  # Store for 24 hours
 
-        except serializers.ValidationError:
-            raise
-        except Exception as e:
-            logger.error(f"Error checking duplicate faces: {str(e)}")
-            raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
+        if len(attempts) >= 3:
+            logger.critical(
+                f"Multiple duplicate attempts detected for user {current_user_id}"
+            )
+            # You might want to implement additional security measures here
+    except Exception as e:
+        logger.error(f"Error recording duplicate attempt: {str(e)}")
+
+def _check_suspicious_activity(self, user_id):
+    """Check for suspicious verification attempts"""
+    try:
+        attempts = cache.get(f'duplicate_attempts_{user_id}', [])
+        recent_attempts = [
+            a for a in attempts 
+            if (datetime.now() - datetime.fromisoformat(a['timestamp'])).seconds < 3600
+        ]
+        return len(recent_attempts) >= 3
+    except Exception as e:
+        logger.error(f"Error checking suspicious activity: {str(e)}")
+        return False
 
 def _check_face_liveness(self, image_bytes):
     try:
