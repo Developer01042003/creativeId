@@ -39,7 +39,7 @@ rekognition_client = boto3.client('rekognition')
 s3_client = boto3.client('s3')
 
 # Define your S3 bucket name
-S3_BUCKET_NAME = 'imagingkycalphabetagama'
+S3_BUCKET_NAME = 'imagingkyc'
 
 class UserKYCSerializer(serializers.ModelSerializer):
     class Meta:
