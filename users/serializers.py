@@ -55,8 +55,7 @@ from rest_framework import serializers
 from django.core.files.uploadedfile import InMemoryUploadedFile
 
 # Initialize the Rekognition client
-session = boto3.Session(profile_name='default')
-rekognition_client = session.client('rekognition')
+
 
 class UserKYCSerializer(serializers.ModelSerializer):
     class Meta:
