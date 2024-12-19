@@ -6,7 +6,6 @@ import io
 import logging
 from PIL import Image
 from django.core.files.uploadedfile import InMemoryUploadedFile
-from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -46,17 +45,6 @@ class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
-import boto3
-import io
-import hashlib
-from PIL import Image
-from django.core.cache import cache
-from rest_framework import serializers
-from django.core.files.uploadedfile import InMemoryUploadedFile
-
-# Initialize the Rekognition client
-
-
 class UserKYCSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserKYC
@@ -83,7 +71,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             
             # Check face orientation
             pose = face_details['Pose']
-            max_angle = 20  # Increased from 15
+            max_angle = 15
             if abs(pose['Pitch']) > max_angle or abs(pose['Roll']) > max_angle or abs(pose['Yaw']) > max_angle:
                 raise serializers.ValidationError("Face is not properly aligned. Please look straight at the camera.")
             
@@ -103,171 +91,19 @@ class UserKYCSerializer(serializers.ModelSerializer):
             logger.error(f"Error in face analysis: {str(e)}")
             raise serializers.ValidationError("Error analyzing face details. Please try again with a clearer photo.")
 
-    def _check_liveness(self, image_bytes):
-        try:
-            response = rekognition_client.detect_faces(
-                Image={'Bytes': image_bytes},
-                Attributes=['ALL']
-            )
-
-            if not response['FaceDetails']:
-                raise serializers.ValidationError("No face detected for liveness check.")
-
-            face_details = response['FaceDetails'][0]
-
-            # Basic face confidence check
-            if face_details['Confidence'] < 85:  # Reduced from 90
-                raise serializers.ValidationError("Low confidence in face detection. Please ensure good lighting and clear image.")
-
-            # Quality and Lighting Checks
-            quality_checks = self._perform_quality_checks(face_details)
-            if not quality_checks['passed']:
-                raise serializers.ValidationError(quality_checks['message'])
-
-            # Depth Analysis
-            depth_score = self._analyze_depth_information(face_details)
-            logger.info(f"Depth score: {depth_score}")
-            if depth_score < 0.4:  # Reduced threshold
-                raise serializers.ValidationError("Please ensure you're using a real face photo.")
-
-            # Texture Analysis
-            texture_score = self._analyze_facial_texture(face_details)
-            logger.info(f"Texture score: {texture_score}")
-            if texture_score < 0.5:  # Reduced threshold
-                raise serializers.ValidationError("Please provide a clearer photo with good lighting.")
-
-            return True
-
-        except serializers.ValidationError:
-            raise
-        except Exception as e:
-            logger.error(f"Liveness check error: {str(e)}")
-            return True  # More permissive error handling
-
-    def _perform_quality_checks(self, face_details):
-        quality_threshold = 60  # Reduced from 65
-        result = {'passed': True, 'message': ''}
-
-        # Check brightness with wider range
-        brightness = face_details.get('Quality', {}).get('Brightness', 0)
-        if brightness < 30 or brightness > 230:  # Wider range
-            result['passed'] = False
-            result['message'] = "Please ensure face is well-lit."
-            return result
-
-        # Check sharpness
-        sharpness = face_details.get('Quality', {}).get('Sharpness', 0)
-        if sharpness < quality_threshold:
-            result['passed'] = False
-            result['message'] = "Image is too blurry. Please provide a clearer photo."
-            return result
-
-        return result
-
-    def _analyze_depth_information(self, face_details):
-        try:
-            pose = face_details.get('Pose', {})
-            landmarks = face_details.get('Landmarks', [])
-            
-            depth_indicators = []
-            
-            # More lenient pose scoring
-            pose_score = 1.0
-            pitch = abs(pose.get('Pitch', 0))
-            roll = abs(pose.get('Roll', 0))
-            yaw = abs(pose.get('Yaw', 0))
-            
-            if pitch < 25 and roll < 25 and yaw < 25:
-                pose_score = 0.8
-            elif pitch < 35 and roll < 35 and yaw < 35:
-                pose_score = 0.6
-            else:
-                pose_score = 0.4
-            
-            depth_indicators.append(pose_score)
-
-            return sum(depth_indicators) / len(depth_indicators) if depth_indicators else 0.5
-
-        except Exception as e:
-            logger.error(f"Depth analysis error: {str(e)}")
-            return 0.5
-
-    def _analyze_facial_texture(self, face_details):
-        try:
-            quality = face_details.get('Quality', {})
-            texture_scores = []
-            
-            if 'Sharpness' in quality:
-                sharpness = quality['Sharpness']
-                sharpness_score = min((sharpness / 80.0), 1.0)  # More lenient scoring
-                texture_scores.append(sharpness_score)
-            
-            if 'Brightness' in quality:
-                brightness = quality['Brightness']
-                if 35 <= brightness <= 220:
-                    brightness_score = 1.0
-                else:
-                    brightness_score = 0.7
-                texture_scores.append(brightness_score)
-
-            return sum(texture_scores) / len(texture_scores) if texture_scores else 0.5
-
-        except Exception as e:
-            logger.error(f"Texture analysis error: {str(e)}")
-            return 0.5
-
     def _check_duplicate_faces(self, image_bytes, current_user_id=None):
-      try:
-        # Try to create collection if it doesn't exist
         try:
-            rekognition_client.create_collection(CollectionId='user_faces_collection')
-            logger.info("Face collection created or already exists")
-        except rekognition_client.exceptions.ResourceAlreadyExistsException:
-            pass
-        except Exception as e:
-            logger.error(f"Error with collection: {str(e)}")
-            raise serializers.ValidationError("Error initializing face detection system")
+            # Try to create collection if it doesn't exist
+            try:
+                rekognition_client.create_collection(CollectionId='user_faces_collection')
+                logger.info("Face collection created or already exists")
+            except rekognition_client.exceptions.ResourceAlreadyExistsException:
+                pass
+            except Exception as e:
+                logger.error(f"Error with collection: {str(e)}")
+                raise serializers.ValidationError("Error initializing face detection system")
 
-        # Get all objects from S3 bucket
-        try:
-            # Use paginator for better handling of large number of objects
-            paginator = s3_client.get_paginator('list_objects_v2')
-            pages = paginator.paginate(
-                Bucket=S3_BUCKET_NAME,
-                Prefix='selfies/'  # Only look in selfies folder
-            )
-            
-            # Compare with each image in S3
-            for page in pages:
-                for obj in page.get('Contents', []):
-                    if not obj['Key'].startswith('selfies/'):
-                        continue
-                    
-                    try:
-                        compare_response = rekognition_client.compare_faces(
-                            SourceImage={'Bytes': image_bytes},
-                            TargetImage={
-                                'S3Object': {
-                                    'Bucket': S3_BUCKET_NAME,
-                                    'Name': obj['Key']
-                                }
-                            },
-                            SimilarityThreshold=90
-                        )
-                        
-                        if compare_response.get('FaceMatches'):
-                            similarity = compare_response['FaceMatches'][0]['Similarity']
-                            logger.warning(f"Duplicate face found in S3 with similarity: {similarity}%")
-                            return True, f"This face matches an existing user's verification photo. (Similarity: {similarity:.2f}%)"
-                            
-                    except rekognition_client.exceptions.InvalidParameterException:
-                        logger.warning(f"No face found in image: {obj['Key']}")
-                        continue
-                    except Exception as e:
-                        logger.error(f"Error comparing faces with {obj['Key']}: {str(e)}")
-                        continue
-
-            # If no matches found in S3, check collection as backup
+            # Search for face in collection
             try:
                 search_response = rekognition_client.search_faces_by_image(
                     CollectionId='user_faces_collection',
@@ -277,28 +113,44 @@ class UserKYCSerializer(serializers.ModelSerializer):
                 )
                 
                 if search_response.get('FaceMatches'):
-                    similarity = search_response['FaceMatches'][0]['Similarity']
-                    logger.warning(f"Duplicate face found in collection with similarity: {similarity}%")
-                    return True, f"This face has already been registered in our system. (Similarity: {similarity:.2f}%)"
+                    logger.warning("Duplicate face found in collection")
+                    return True, "This face has already been registered in our system."
                     
             except rekognition_client.exceptions.InvalidParameterException:
-                logger.warning("No faces found during collection check")
+                logger.warning("No faces found during duplicate check")
                 pass
-            except Exception as e:
-                logger.error(f"Error searching in collection: {str(e)}")
-                pass
+
+            # Compare with existing images
+            existing_kycs = UserKYC.objects.exclude(user_id=current_user_id)
+            for existing_kyc in existing_kycs:
+                if not existing_kyc.s3_image_url:
+                    continue
+                    
+                try:
+                    compare_response = rekognition_client.compare_faces(
+                        SourceImage={'Bytes': image_bytes},
+                        TargetImage={'S3Object': {
+                            'Bucket': S3_BUCKET_NAME,
+                            'Name': existing_kyc.s3_image_url
+                        }},
+                        SimilarityThreshold=90
+                    )
+                    
+                    if compare_response.get('FaceMatches'):
+                        logger.warning("Duplicate face found in direct comparison")
+                        return True, "This face matches an existing user's verification photo."
+                        
+                except Exception as e:
+                    logger.error(f"Error comparing faces: {str(e)}")
+                    continue
             
             return False, ""
             
+        except serializers.ValidationError:
+            raise
         except Exception as e:
-            logger.error(f"Error listing S3 objects: {str(e)}")
-            raise serializers.ValidationError("Error accessing image storage system")
-            
-    except serializers.ValidationError:
-        raise
-    except Exception as e:
-        logger.error(f"Error checking duplicate faces: {str(e)}")
-        raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
+            logger.error(f"Error checking duplicate faces: {str(e)}")
+            raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
     def validate_selfie(self, value):
         try:
@@ -408,13 +260,16 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
     def _compress_image(self, image):
         try:
+            # Convert to RGB if necessary
             if image.mode != 'RGB':
                 image = image.convert('RGB')
 
+            # Resize if needed while maintaining aspect ratio
             max_size = 1024
             if image.width > max_size or image.height > max_size:
                 image.thumbnail((max_size, max_size))
 
+            # Compress
             buffer = io.BytesIO()
             image.save(buffer, format='JPEG', quality=85, optimize=True)
             buffer.seek(0)
@@ -426,6 +281,23 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         try:
+            # Double-check for duplicate face_id
+            face_id = getattr(validated_data.get('selfie'), 'face_id', None)
+            if face_id and UserKYC.objects.filter(face_id=face_id).exists():
+                # Clean up the indexed face
+                try:
+                    rekognition_client.delete_faces(
+                        CollectionId='user_faces_collection',
+                        FaceIds=[face_id]
+                    )
+                except Exception as e:
+                    logger.error(f"Error cleaning up face index: {str(e)}")
+                
+                raise serializers.ValidationError(
+                    "This face has already been registered in our system."
+                )
+
+            # Create KYC record
             kyc = UserKYC.objects.create(
                 **validated_data,
                 face_id=getattr(validated_data['selfie'], 'face_id', None),
@@ -433,8 +305,22 @@ class UserKYCSerializer(serializers.ModelSerializer):
                 face_confidence=getattr(validated_data['selfie'], 'face_confidence', None),
                 s3_image_url=getattr(validated_data['selfie'], 's3_image_url', None)
             )
+
             return kyc
 
+        except serializers.ValidationError:
+            raise
         except Exception as e:
             logger.error(f"Error creating KYC: {str(e)}")
+            # Clean up any indexed face if creation fails
+            face_id = getattr(validated_data.get('selfie'), 'face_id', None)
+            if face_id:
+                try:
+                    rekognition_client.delete_faces(
+                        CollectionId='user_faces_collection',
+                        FaceIds=[face_id]
+                    )
+                except Exception as del_e:
+                    logger.error(f"Error cleaning up face index: {str(del_e)}")
+            
             raise serializers.ValidationError("Error creating KYC record. Please try again.")
