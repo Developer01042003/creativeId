@@ -38,21 +38,20 @@ class CustomUser(AbstractUser):
 
 class UserKYC(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
-    full_name = models.CharField(max_length=100,default="none")  # Added field for first name
-     # Added field for last name
+    full_name = models.CharField(max_length=100, default="none")
     contact_number = models.CharField(max_length=15)
     address = models.TextField()
     country = models.CharField(max_length=50)
     selfie = models.ImageField(upload_to="selfies/")
-    face_hash = models.CharField(max_length=64, null=True, blank=True)  # Add face_hash to store the cropped face hash
+    face_hash = models.CharField(max_length=64, null=True, blank=True)
     image_hash = models.CharField(max_length=32, unique=True, null=True, blank=True)
-    face_embeddings = models.JSONField(null=True, blank=True)  # Stores face embeddings for advanced checks
+    face_embeddings = models.JSONField(null=True, blank=True)
+    s3_image_url = models.CharField(max_length=255, null=True, blank=True)  # Store S3 URL
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"KYC for {self.full_name} ({self.user.email})"
-
 
     class Meta:
         verbose_name = "User KYC"
