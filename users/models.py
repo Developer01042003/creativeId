@@ -138,18 +138,3 @@ class UserKYC(models.Model):
     def is_pending(self):
         return self.verification_status == 'PENDING'
 
-# Signal to create UserKYC instance when a new user is created
-from django.db.models.signals import post_save
-from django.dispatch import receiver
-
-@receiver(post_save, sender=CustomUser)
-def create_user_kyc(sender, instance, created, **kwargs):
-    if created:
-        UserKYC.objects.create(user=instance)
-
-@receiver(post_save, sender=UserKYC)
-def update_user_status(sender, instance, **kwargs):
-    user = instance.user
-    if instance.verification_status == 'APPROVED':
-        user.is_verified = True
-    user.save()
