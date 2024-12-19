@@ -217,23 +217,29 @@ class UserKYCSerializer(serializers.ModelSerializer):
             return 0.5
 
     def _check_duplicate_faces(self, image_bytes, current_user_id=None):
+    try:
+        # Try to create collection if it doesn't exist
         try:
-            # Try to create collection if it doesn't exist
-            try:
-                rekognition_client.create_collection(CollectionId='user_faces_collection')
-                logger.info("Face collection created or already exists")
-            except rekognition_client.exceptions.ResourceAlreadyExistsException:
-                pass
-            except Exception as e:
-                logger.error(f"Error with collection: {str(e)}")
-                raise serializers.ValidationError("Error initializing face detection system")
+            rekognition_client.create_collection(CollectionId='user_faces_collection')
+            logger.info("Face collection created or already exists")
+        except rekognition_client.exceptions.ResourceAlreadyExistsException:
+            pass
+        except Exception as e:
+            logger.error(f"Error with collection: {str(e)}")
+            raise serializers.ValidationError("Error initializing face detection system")
 
-            # Get all objects from S3 bucket
-            try:
-                s3_objects = s3_client.list_objects_v2(Bucket=S3_BUCKET_NAME)
-                
-                # Compare with each image in S3
-                for obj in s3_objects.get('Contents', []):
+        # Get all objects from S3 bucket
+        try:
+            # Use paginator for better handling of large number of objects
+            paginator = s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(
+                Bucket=S3_BUCKET_NAME,
+                Prefix='selfies/'  # Only look in selfies folder
+            )
+            
+            # Compare with each image in S3
+            for page in pages:
+                for obj in page.get('Contents', []):
                     if not obj['Key'].startswith('selfies/'):
                         continue
                     
@@ -252,7 +258,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
                         if compare_response.get('FaceMatches'):
                             similarity = compare_response['FaceMatches'][0]['Similarity']
                             logger.warning(f"Duplicate face found in S3 with similarity: {similarity}%")
-                            return True, "This face matches an existing user's verification photo."
+                            return True, f"This face matches an existing user's verification photo. (Similarity: {similarity:.2f}%)"
                             
                     except rekognition_client.exceptions.InvalidParameterException:
                         logger.warning(f"No face found in image: {obj['Key']}")
@@ -273,7 +279,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
                     if search_response.get('FaceMatches'):
                         similarity = search_response['FaceMatches'][0]['Similarity']
                         logger.warning(f"Duplicate face found in collection with similarity: {similarity}%")
-                        return True, "This face has already been registered in our system."
+                        return True, f"This face has already been registered in our system. (Similarity: {similarity:.2f}%)"
                         
                 except rekognition_client.exceptions.InvalidParameterException:
                     logger.warning("No faces found during collection check")
@@ -283,6 +289,16 @@ class UserKYCSerializer(serializers.ModelSerializer):
                     pass
                 
                 return False, ""
+                
+            except Exception as e:
+                logger.error(f"Error listing S3 objects: {str(e)}")
+                raise serializers.ValidationError("Error accessing image storage system")
+                
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error checking duplicate faces: {str(e)}")
+            raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
                 
             except Exception as e:
                 logger.error(f"Error listing S3 objects: {str(e)}")
