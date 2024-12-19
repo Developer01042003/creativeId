@@ -119,8 +119,9 @@ class UserKYCSerializer(serializers.ModelSerializer):
                 response = rekognition_client.compare_faces(
                     SourceImage={'Bytes': image_bytes},
                     TargetImage={'S3Object': {'Bucket': S3_BUCKET_NAME, 'Name': user_kyc.s3_image_url}},
-                    SimilarityThreshold=90  # Set a threshold for similarity
+                    SimilarityThreshold=85  # Adjust threshold if needed
                 )
+                logger.debug(f"Rekognition response: {response}")
                 if response['FaceMatches']:
                     return True
         return False
