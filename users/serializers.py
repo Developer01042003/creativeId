@@ -165,30 +165,90 @@ class UserKYCSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
     def _check_face_liveness(self, image_bytes):
-        try:
-            # Create a face liveness session
-            response = rekognition_client.create_face_liveness_session()
-            session_id = response.get("SessionId")
-            logger.info(f"Created a Face Liveness Session with ID: {session_id}")
+    try:
+        # Use detect_faces instead of liveness session
+        response = rekognition_client.detect_faces(
+            Image={'Bytes': image_bytes},
+            Attributes=['ALL']
+        )
 
-            # Get the session results
-            response = rekognition_client.get_face_liveness_session_results(SessionId=session_id)
-            confidence = response.get("Confidence")
-            status = response.get("Status")
+        if not response.get('FaceDetails'):
+            raise serializers.ValidationError(
+                "No face detected. Please take a clear, direct photo of your face."
+            )
 
-            logger.info(f"Liveness check - Confidence: {confidence}, Status: {status}")
+        face_details = response['FaceDetails'][0]
+        quality = face_details.get('Quality', {})
 
-            # Check the status and confidence
-            if status != 'SUCCEEDED' or confidence < 90:
-                raise serializers.ValidationError(
-                    "Unable to verify if this is a live photo. Please ensure you're taking a real-time photo."
-                )
+        # Enhanced quality checks
+        brightness = quality.get('Brightness', 0)
+        sharpness = quality.get('Sharpness', 0)
+        confidence = face_details.get('Confidence', 0)
 
-            return True
+        # Check for screen capture indicators
+        if brightness > 90:
+            raise serializers.ValidationError(
+                "Unusual brightness detected. Please take a direct photo instead of capturing from a screen."
+            )
 
-        except Exception as e:
-            logger.error(f"Error in liveness detection: {str(e)}")
-            raise serializers.ValidationError("Unable to verify photo authenticity. Please try again.")
+        if brightness < 30:
+            raise serializers.ValidationError(
+                "Image too dark. Please take photo in better lighting."
+            )
+
+        if sharpness < 50:
+            raise serializers.ValidationError(
+                "Image not clear enough. Please take a direct photo instead of capturing from another photo or screen."
+            )
+
+        if confidence < 90:
+            raise serializers.ValidationError(
+                "Low quality face detection. Please take a clear, direct photo."
+            )
+
+        # Check image properties
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # Convert to grayscale for analysis
+        gray_image = image.convert('L')
+        extrema = gray_image.getextrema()
+        
+        # Check contrast range (screen captures often have limited range)
+        if extrema[1] - extrema[0] < 50:
+            raise serializers.ValidationError(
+                "Poor image quality detected. Please take a direct photo instead of capturing from a screen."
+            )
+
+        # Additional checks from face_details
+        if face_details.get('Sunglasses', {}).get('Value', False):
+            raise serializers.ValidationError(
+                "Please remove sunglasses and take a direct photo."
+            )
+
+        if not face_details.get('EyesOpen', {}).get('Value', False):
+            raise serializers.ValidationError(
+                "Please keep your eyes open while taking the photo."
+            )
+
+        # Check face orientation
+        pose = face_details.get('Pose', {})
+        max_angle = 15
+        if (abs(pose.get('Pitch', 0)) > max_angle or 
+            abs(pose.get('Roll', 0)) > max_angle or 
+            abs(pose.get('Yaw', 0)) > max_angle):
+            raise serializers.ValidationError(
+                "Please look directly at the camera with your face straight."
+            )
+
+        return True
+
+    except serializers.ValidationError:
+        raise
+    except Exception as e:
+        logger.error(f"Error in liveness detection: {str(e)}")
+        raise serializers.ValidationError(
+            "Unable to verify photo authenticity. Please take a direct photo instead of capturing from a screen or another photo."
+        )
 
     def validate_selfie(self, value):
         try:
