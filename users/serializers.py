@@ -76,11 +76,14 @@ class UserKYCSerializer(serializers.ModelSerializer):
             # Resolution check
             width, height = image.size
             if width < 200 or height < 200:
-                raise serializers.ValidationError("Image resolution too low. Minimum 200x200 pixels required.")
+                raise serializers.ValidationError("Sorry, cannot proceed: Image resolution too low. Minimum 200x200 pixels required.")
 
-            # Check for duplicate face using Rekognition
+            # Check for open eyes and duplicate face using Rekognition
+            if not self.is_eyes_open(image_bytes):
+                raise serializers.ValidationError("Sorry, cannot proceed: Eyes must be open in the selfie.")
+
             if self.is_duplicate_face(image_bytes):
-                raise serializers.ValidationError("This face image has already been used. Please upload a different image.")
+                raise serializers.ValidationError("Sorry, cannot proceed: This face image has already been used. Please upload a different image.")
 
             # Compress and save the image
             optimized_image = self._compress_image(image)
@@ -92,7 +95,22 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
         except Exception as e:
             logger.error(f"Error processing image: {str(e)}")
-            raise serializers.ValidationError(f"Error processing image: {str(e)}")
+            raise serializers.ValidationError(f"Sorry, cannot proceed: Error processing image.")
+
+    def is_eyes_open(self, image_bytes):
+        # Analyze the image for facial features
+        response = rekognition_client.detect_faces(
+            Image={'Bytes': image_bytes},
+            Attributes=['ALL']
+        )
+        if not response['FaceDetails']:
+            return False
+
+        face_details = response['FaceDetails'][0]
+        left_eye_open = face_details['EyesOpen']['Value']
+        right_eye_open = face_details['EyesOpen']['Value']
+
+        return left_eye_open and right_eye_open
 
     def is_duplicate_face(self, image_bytes):
         # Retrieve all reference images from S3 and compare
@@ -135,7 +153,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
         image_hash = validated_data.get('selfie').image_hash
 
         if UserKYC.objects.filter(image_hash=image_hash).exists():
-            raise serializers.ValidationError("This image has already been used. Please upload a different image.")
+            raise serializers.ValidationError("Sorry, cannot proceed: This image has already been used. Please upload a different image.")
 
         # Create the UserKYC instance
         kyc = UserKYC.objects.create(**validated_data)
@@ -150,7 +168,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             image_hash = validated_data['selfie'].image_hash
 
             if UserKYC.objects.filter(image_hash=image_hash).exists():
-                raise serializers.ValidationError("This image has already been used. Please upload a different image.")
+                raise serializers.ValidationError("Sorry, cannot proceed: This image has already been used. Please upload a different image.")
             
             # Update the hash if the image is new
             instance.image_hash = image_hash
