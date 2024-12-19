@@ -165,15 +165,15 @@ class UserKYCSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
     def _check_face_liveness(self, image_bytes):
-    try:
+       try:
         # Basic face detection
         response = rekognition_client.detect_faces(
             Image={'Bytes': image_bytes},
             Attributes=['ALL']
         )
 
-        if not response.get('FaceDetails'):
-            raise serializers.ValidationError(
+          if not response.get('FaceDetails'):
+              raise serializers.ValidationError(
                 "No face detected. Please take a clear photo of your face."
             )
 
@@ -184,19 +184,19 @@ class UserKYCSerializer(serializers.ModelSerializer):
         confidence = face_details.get('Confidence', 0)
 
         # More lenient thresholds
-        if confidence < 80:  # Reduced from 90
-            raise serializers.ValidationError(
+          if confidence < 80:  # Reduced from 90
+              raise serializers.ValidationError(
                 "Please take a clearer photo of your face."
             )
 
         # Check basic face attributes
-        if face_details.get('Sunglasses', {}).get('Value', False):
-            raise serializers.ValidationError(
+          if face_details.get('Sunglasses', {}).get('Value', False):
+              raise serializers.ValidationError(
                 "Please remove sunglasses."
             )
 
-        if not face_details.get('EyesOpen', {}).get('Value', False):
-            raise serializers.ValidationError(
+          if not face_details.get('EyesOpen', {}).get('Value', False):
+              raise serializers.ValidationError(
                 "Please keep your eyes open."
             )
 
