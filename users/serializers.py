@@ -6,6 +6,7 @@ import io
 import logging
 from PIL import Image
 from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
