@@ -217,7 +217,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             return 0.5
 
     def _check_duplicate_faces(self, image_bytes, current_user_id=None):
-    try:
+      try:
         # Try to create collection if it doesn't exist
         try:
             rekognition_client.create_collection(CollectionId='user_faces_collection')
@@ -267,48 +267,38 @@ class UserKYCSerializer(serializers.ModelSerializer):
                         logger.error(f"Error comparing faces with {obj['Key']}: {str(e)}")
                         continue
 
-                # If no matches found in S3, check collection as backup
-                try:
-                    search_response = rekognition_client.search_faces_by_image(
-                        CollectionId='user_faces_collection',
-                        Image={'Bytes': image_bytes},
-                        MaxFaces=1,
-                        FaceMatchThreshold=90
-                    )
+            # If no matches found in S3, check collection as backup
+            try:
+                search_response = rekognition_client.search_faces_by_image(
+                    CollectionId='user_faces_collection',
+                    Image={'Bytes': image_bytes},
+                    MaxFaces=1,
+                    FaceMatchThreshold=90
+                )
+                
+                if search_response.get('FaceMatches'):
+                    similarity = search_response['FaceMatches'][0]['Similarity']
+                    logger.warning(f"Duplicate face found in collection with similarity: {similarity}%")
+                    return True, f"This face has already been registered in our system. (Similarity: {similarity:.2f}%)"
                     
-                    if search_response.get('FaceMatches'):
-                        similarity = search_response['FaceMatches'][0]['Similarity']
-                        logger.warning(f"Duplicate face found in collection with similarity: {similarity}%")
-                        return True, f"This face has already been registered in our system. (Similarity: {similarity:.2f}%)"
-                        
-                except rekognition_client.exceptions.InvalidParameterException:
-                    logger.warning("No faces found during collection check")
-                    pass
-                except Exception as e:
-                    logger.error(f"Error searching in collection: {str(e)}")
-                    pass
-                
-                return False, ""
-                
+            except rekognition_client.exceptions.InvalidParameterException:
+                logger.warning("No faces found during collection check")
+                pass
             except Exception as e:
-                logger.error(f"Error listing S3 objects: {str(e)}")
-                raise serializers.ValidationError("Error accessing image storage system")
-                
-        except serializers.ValidationError:
-            raise
+                logger.error(f"Error searching in collection: {str(e)}")
+                pass
+            
+            return False, ""
+            
         except Exception as e:
-            logger.error(f"Error checking duplicate faces: {str(e)}")
-            raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
-                
-            except Exception as e:
-                logger.error(f"Error listing S3 objects: {str(e)}")
-                raise serializers.ValidationError("Error accessing image storage system")
-                
-        except serializers.ValidationError:
-            raise
-        except Exception as e:
-            logger.error(f"Error checking duplicate faces: {str(e)}")
-            raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
+            logger.error(f"Error listing S3 objects: {str(e)}")
+            raise serializers.ValidationError("Error accessing image storage system")
+            
+    except serializers.ValidationError:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking duplicate faces: {str(e)}")
+        raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
     def validate_selfie(self, value):
         try:
