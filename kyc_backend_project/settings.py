@@ -162,5 +162,21 @@ AWS_S3_REGION_NAME = 'us-east-1'
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
-
+AWS_S3_REGION_NAME = 'us-east-1'  # Ensure this is set
 AWS_QUERYSTRING_AUTH = False  # Optional: to make files publicly accessible
+
+import boto3
+
+s3_client = boto3.client(
+    's3',
+    region_name=AWS_S3_REGION_NAME,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
+
+rekognition_client = boto3.client(
+    'rekognition',
+    region_name=AWS_S3_REGION_NAME,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
