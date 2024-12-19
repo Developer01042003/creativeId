@@ -103,7 +103,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             logger.error(f"Error in face analysis: {str(e)}")
             raise serializers.ValidationError("Error analyzing face details. Please try again with a clearer photo.")
 
-def _check_liveness(self, image_bytes):
+    def _check_liveness(self, image_bytes):
         try:
             response = rekognition_client.detect_faces(
                 Image={'Bytes': image_bytes},
@@ -144,7 +144,7 @@ def _check_liveness(self, image_bytes):
             logger.error(f"Liveness check error: {str(e)}")
             return True  # More permissive error handling
 
-def _perform_quality_checks(self, face_details):
+    def _perform_quality_checks(self, face_details):
         quality_threshold = 60  # Reduced from 65
         result = {'passed': True, 'message': ''}
 
@@ -164,7 +164,7 @@ def _perform_quality_checks(self, face_details):
 
         return result
 
-def _analyze_depth_information(self, face_details):
+    def _analyze_depth_information(self, face_details):
         try:
             pose = face_details.get('Pose', {})
             landmarks = face_details.get('Landmarks', [])
@@ -192,7 +192,7 @@ def _analyze_depth_information(self, face_details):
             logger.error(f"Depth analysis error: {str(e)}")
             return 0.5
 
-def _analyze_facial_texture(self, face_details):
+    def _analyze_facial_texture(self, face_details):
         try:
             quality = face_details.get('Quality', {})
             texture_scores = []
@@ -216,191 +216,191 @@ def _analyze_facial_texture(self, face_details):
             logger.error(f"Texture analysis error: {str(e)}")
             return 0.5
 
-def _check_duplicate_faces(self, image_bytes, current_user_id=None):
-    try:
-        # Try to create collection if it doesn't exist
+    def _check_duplicate_faces(self, image_bytes, current_user_id=None):
         try:
-            rekognition_client.create_collection(CollectionId='user_faces_collection')
-            logger.info("Face collection created or already exists")
-        except rekognition_client.exceptions.ResourceAlreadyExistsException:
-            pass
-        except Exception as e:
-            logger.error(f"Error with collection: {str(e)}")
-            raise serializers.ValidationError("Error initializing face detection system")
+            # Try to create collection if it doesn't exist
+            try:
+                rekognition_client.create_collection(CollectionId='user_faces_collection')
+                logger.info("Face collection created or already exists")
+            except rekognition_client.exceptions.ResourceAlreadyExistsException:
+                pass
+            except Exception as e:
+                logger.error(f"Error with collection: {str(e)}")
+                raise serializers.ValidationError("Error initializing face detection system")
 
-        # Get all objects from S3 bucket
-        try:
-            s3_objects = s3_client.list_objects_v2(Bucket=S3_BUCKET_NAME)
-            
-            # Compare with each image in S3
-            for obj in s3_objects.get('Contents', []):
-                if not obj['Key'].startswith('selfies/'):
-                    continue
+            # Get all objects from S3 bucket
+            try:
+                s3_objects = s3_client.list_objects_v2(Bucket=S3_BUCKET_NAME)
                 
+                # Compare with each image in S3
+                for obj in s3_objects.get('Contents', []):
+                    if not obj['Key'].startswith('selfies/'):
+                        continue
+                    
+                    try:
+                        compare_response = rekognition_client.compare_faces(
+                            SourceImage={'Bytes': image_bytes},
+                            TargetImage={
+                                'S3Object': {
+                                    'Bucket': S3_BUCKET_NAME,
+                                    'Name': obj['Key']
+                                }
+                            },
+                            SimilarityThreshold=90
+                        )
+                        
+                        if compare_response.get('FaceMatches'):
+                            similarity = compare_response['FaceMatches'][0]['Similarity']
+                            logger.warning(f"Duplicate face found in S3 with similarity: {similarity}%")
+                            return True, "This face matches an existing user's verification photo."
+                            
+                    except rekognition_client.exceptions.InvalidParameterException:
+                        logger.warning(f"No face found in image: {obj['Key']}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error comparing faces with {obj['Key']}: {str(e)}")
+                        continue
+
+                # If no matches found in S3, check collection as backup
                 try:
-                    compare_response = rekognition_client.compare_faces(
-                        SourceImage={'Bytes': image_bytes},
-                        TargetImage={
-                            'S3Object': {
-                                'Bucket': S3_BUCKET_NAME,
-                                'Name': obj['Key']
-                            }
-                        },
-                        SimilarityThreshold=90
+                    search_response = rekognition_client.search_faces_by_image(
+                        CollectionId='user_faces_collection',
+                        Image={'Bytes': image_bytes},
+                        MaxFaces=1,
+                        FaceMatchThreshold=90
                     )
                     
-                    if compare_response.get('FaceMatches'):
-                        similarity = compare_response['FaceMatches'][0]['Similarity']
-                        logger.warning(f"Duplicate face found in S3 with similarity: {similarity}%")
-                        return True, "This face matches an existing user's verification photo."
+                    if search_response.get('FaceMatches'):
+                        similarity = search_response['FaceMatches'][0]['Similarity']
+                        logger.warning(f"Duplicate face found in collection with similarity: {similarity}%")
+                        return True, "This face has already been registered in our system."
                         
                 except rekognition_client.exceptions.InvalidParameterException:
-                    logger.warning(f"No face found in image: {obj['Key']}")
-                    continue
+                    logger.warning("No faces found during collection check")
+                    pass
                 except Exception as e:
-                    logger.error(f"Error comparing faces with {obj['Key']}: {str(e)}")
-                    continue
+                    logger.error(f"Error searching in collection: {str(e)}")
+                    pass
+                
+                return False, ""
+                
+            except Exception as e:
+                logger.error(f"Error listing S3 objects: {str(e)}")
+                raise serializers.ValidationError("Error accessing image storage system")
+                
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error checking duplicate faces: {str(e)}")
+            raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
-            # If no matches found in S3, check collection as backup
+    def validate_selfie(self, value):
+        try:
+            if not isinstance(value, InMemoryUploadedFile):
+                raise serializers.ValidationError("Invalid image format. Please upload a valid image file.")
+
+            # Read image data
+            image_bytes = value.read()
+            image = Image.open(io.BytesIO(image_bytes))
+            value.seek(0)
+
+            # Basic image validations
+            width, height = image.size
+            if width < 200 or height < 200:
+                raise serializers.ValidationError(
+                    "Image resolution too low. Minimum 200x200 pixels required."
+                )
+
+            # Check file size (max 10MB)
+            if value.size > 10 * 1024 * 1024:
+                raise serializers.ValidationError(
+                    "Image size too large. Maximum 10MB allowed."
+                )
+
+            # Validate image format
+            if image.format.upper() not in ['JPEG', 'JPG', 'PNG']:
+                raise serializers.ValidationError(
+                    "Invalid image format. Please upload a JPEG or PNG image."
+                )
+
+            # Face analysis
+            face_details = self._analyze_face_details(image_bytes)
+            value.seek(0)
+
+            # Check for duplicates
+            is_duplicate, error_message = self._check_duplicate_faces(
+                image_bytes,
+                self.context.get('user_id')
+            )
+            
+            if is_duplicate:
+                raise serializers.ValidationError(error_message)
+
+            value.seek(0)
+
             try:
-                search_response = rekognition_client.search_faces_by_image(
+                # Index the face
+                index_response = rekognition_client.index_faces(
                     CollectionId='user_faces_collection',
                     Image={'Bytes': image_bytes},
                     MaxFaces=1,
-                    FaceMatchThreshold=90
-                )
-                
-                if search_response.get('FaceMatches'):
-                    similarity = search_response['FaceMatches'][0]['Similarity']
-                    logger.warning(f"Duplicate face found in collection with similarity: {similarity}%")
-                    return True, "This face has already been registered in our system."
-                    
-            except rekognition_client.exceptions.InvalidParameterException:
-                logger.warning("No faces found during collection check")
-                pass
-            except Exception as e:
-                logger.error(f"Error searching in collection: {str(e)}")
-                pass
-            
-            return False, ""
-            
-        except Exception as e:
-            logger.error(f"Error listing S3 objects: {str(e)}")
-            raise serializers.ValidationError("Error accessing image storage system")
-            
-    except serializers.ValidationError:
-        raise
-    except Exception as e:
-        logger.error(f"Error checking duplicate faces: {str(e)}")
-        raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
-
-def validate_selfie(self, value):
-    try:
-        if not isinstance(value, InMemoryUploadedFile):
-            raise serializers.ValidationError("Invalid image format. Please upload a valid image file.")
-
-        # Read image data
-        image_bytes = value.read()
-        image = Image.open(io.BytesIO(image_bytes))
-        value.seek(0)
-
-        # Basic image validations
-        width, height = image.size
-        if width < 200 or height < 200:
-            raise serializers.ValidationError(
-                "Image resolution too low. Minimum 200x200 pixels required."
-            )
-
-        # Check file size (max 10MB)
-        if value.size > 10 * 1024 * 1024:
-            raise serializers.ValidationError(
-                "Image size too large. Maximum 10MB allowed."
-            )
-
-        # Validate image format
-        if image.format.upper() not in ['JPEG', 'JPG', 'PNG']:
-            raise serializers.ValidationError(
-                "Invalid image format. Please upload a JPEG or PNG image."
-            )
-
-        # Face analysis
-        face_details = self._analyze_face_details(image_bytes)
-        value.seek(0)
-
-        # Check for duplicates
-        is_duplicate, error_message = self._check_duplicate_faces(
-            image_bytes,
-            self.context.get('user_id')
-        )
-        
-        if is_duplicate:
-            raise serializers.ValidationError(error_message)
-
-        value.seek(0)
-
-        try:
-            # Index the face
-            index_response = rekognition_client.index_faces(
-                CollectionId='user_faces_collection',
-                Image={'Bytes': image_bytes},
-                MaxFaces=1,
-                QualityFilter="HIGH",
-                DetectionAttributes=['ALL']
-            )
-
-            if not index_response.get('FaceRecords'):
-                raise serializers.ValidationError(
-                    "Failed to process face. Please try again with a clearer photo."
+                    QualityFilter="HIGH",
+                    DetectionAttributes=['ALL']
                 )
 
-            face_id = index_response['FaceRecords'][0]['Face']['FaceId']
-            
-            # Generate image hash and compress
-            optimized_image = self._compress_image(image)
-            image_hash = hashlib.sha256(optimized_image.getvalue()).hexdigest()
-
-            # Store metadata
-            value.face_id = face_id
-            value.image_hash = image_hash
-            value.face_confidence = face_details['Confidence']
-
-            # Upload to S3
-            s3_key = f"selfies/{face_id}.jpg"
-            s3_client.upload_fileobj(
-                optimized_image, 
-                S3_BUCKET_NAME, 
-                s3_key,
-                ExtraArgs={'ContentType': 'image/jpeg'}
-            )
-            value.s3_image_url = s3_key
-
-            return value
-
-        except Exception as e:
-            # Clean up indexed face if there's an error
-            if 'face_id' in locals():
-                try:
-                    rekognition_client.delete_faces(
-                        CollectionId='user_faces_collection',
-                        FaceIds=[face_id]
+                if not index_response.get('FaceRecords'):
+                    raise serializers.ValidationError(
+                        "Failed to process face. Please try again with a clearer photo."
                     )
-                except Exception as del_e:
-                    logger.error(f"Error cleaning up indexed face: {str(del_e)}")
-            
-            logger.error(f"Error processing image: {str(e)}")
+
+                face_id = index_response['FaceRecords'][0]['Face']['FaceId']
+                
+                # Generate image hash and compress
+                optimized_image = self._compress_image(image)
+                image_hash = hashlib.sha256(optimized_image.getvalue()).hexdigest()
+
+                # Store metadata
+                value.face_id = face_id
+                value.image_hash = image_hash
+                value.face_confidence = face_details['Confidence']
+
+                # Upload to S3
+                s3_key = f"selfies/{face_id}.jpg"
+                s3_client.upload_fileobj(
+                    optimized_image, 
+                    S3_BUCKET_NAME, 
+                    s3_key,
+                    ExtraArgs={'ContentType': 'image/jpeg'}
+                )
+                value.s3_image_url = s3_key
+
+                return value
+
+            except Exception as e:
+                # Clean up indexed face if there's an error
+                if 'face_id' in locals():
+                    try:
+                        rekognition_client.delete_faces(
+                            CollectionId='user_faces_collection',
+                            FaceIds=[face_id]
+                        )
+                    except Exception as del_e:
+                        logger.error(f"Error cleaning up indexed face: {str(del_e)}")
+                
+                logger.error(f"Error processing image: {str(e)}")
+                raise serializers.ValidationError(
+                    "Error processing image. Please try again with a different photo."
+                )
+
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in validate_selfie: {str(e)}")
             raise serializers.ValidationError(
-                "Error processing image. Please try again with a different photo."
+                "Error processing image. Please try again."
             )
 
-    except serializers.ValidationError:
-        raise
-    except Exception as e:
-        logger.error(f"Error in validate_selfie: {str(e)}")
-        raise serializers.ValidationError(
-            "Error processing image. Please try again."
-        )
-
-def _compress_image(self, image):
+    def _compress_image(self, image):
         try:
             if image.mode != 'RGB':
                 image = image.convert('RGB')
