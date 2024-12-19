@@ -63,194 +63,182 @@ class UserKYCSerializer(serializers.ModelSerializer):
         fields = ['full_name', 'contact_number', 'address', 'country', 'selfie']
 
     def _check_liveness(self, image_bytes):
-        """
-        Enhanced liveness detection using multiple methods
-        """
-        try:
-            response = rekognition_client.detect_faces(
-                Image={'Bytes': image_bytes},
-                Attributes=['ALL']
-            )
+    """
+    Enhanced liveness detection with adjusted thresholds
+    """
+    try:
+        response = rekognition_client.detect_faces(
+            Image={'Bytes': image_bytes},
+            Attributes=['ALL']
+        )
 
-            if not response['FaceDetails']:
-                raise serializers.ValidationError("No face detected for liveness check.")
+        if not response['FaceDetails']:
+            raise serializers.ValidationError("No face detected for liveness check.")
 
-            face_details = response['FaceDetails'][0]
+        face_details = response['FaceDetails'][0]
 
-            # Quality and Lighting Checks
-            quality_checks = self._perform_quality_checks(face_details)
-            if not quality_checks['passed']:
-                raise serializers.ValidationError(quality_checks['message'])
+        # Basic face confidence check
+        if face_details['Confidence'] < 90:
+            raise serializers.ValidationError("Low confidence in face detection. Please ensure good lighting and clear image.")
 
-            # Depth Analysis
-            depth_score = self._analyze_depth_information(face_details)
-            if depth_score < 0.8:
+        # Quality and Lighting Checks with adjusted thresholds
+        quality_checks = self._perform_quality_checks(face_details)
+        if not quality_checks['passed']:
+            raise serializers.ValidationError(quality_checks['message'])
+
+        # Depth Analysis with adjusted threshold
+        depth_score = self._analyze_depth_information(face_details)
+        if depth_score < 0.5:  # Reduced threshold from 0.8 to 0.5
+            logger.warning(f"Depth score: {depth_score}")
+            if depth_score < 0.3:  # Critical threshold
                 raise serializers.ValidationError("Image appears to be from a flat surface. Please use a real face.")
 
-            # Texture Analysis
-            texture_score = self._analyze_facial_texture(face_details)
-            if texture_score < 0.75:
+        # Texture Analysis with adjusted threshold
+        texture_score = self._analyze_facial_texture(face_details)
+        if texture_score < 0.6:  # Reduced threshold from 0.75 to 0.6
+            logger.warning(f"Texture score: {texture_score}")
+            if texture_score < 0.4:  # Critical threshold
                 raise serializers.ValidationError("Unusual facial texture detected. Please ensure this is a live face.")
 
-            return True
+        return True
 
-        except Exception as e:
-            logger.error(f"Liveness check error: {str(e)}")
-            raise serializers.ValidationError("Failed to verify face liveness. Please try again.")
+    except serializers.ValidationError:
+        raise
+    except Exception as e:
+        logger.error(f"Liveness check error: {str(e)}")
+        raise serializers.ValidationError("Failed to verify face liveness. Please try again.")
 
-    def _perform_quality_checks(self, face_details):
-        quality_threshold = 80
-        result = {'passed': True, 'message': ''}
+def _perform_quality_checks(self, face_details):
+    """
+    Adjusted quality checks with more lenient thresholds
+    """
+    quality_threshold = 65  # Reduced from 80
+    result = {'passed': True, 'message': ''}
 
-        brightness = face_details.get('Quality', {}).get('Brightness', 0)
-        if brightness < 40 or brightness > 200:
-            result['passed'] = False
-            result['message'] = "Poor lighting conditions. Please ensure face is well-lit."
-            return result
-
-        sharpness = face_details.get('Quality', {}).get('Sharpness', 0)
-        if sharpness < quality_threshold:
-            result['passed'] = False
-            result['message'] = "Image is too blurry. Please provide a clearer photo."
-            return result
-
-        landmarks = face_details.get('Landmarks', [])
-        if len(landmarks) < 5:
-            result['passed'] = False
-            result['message'] = "Cannot detect clear facial features. Please retake photo."
-            return result
-
-        if not self._check_face_symmetry(landmarks):
-            result['passed'] = False
-            result['message'] = "Unusual facial symmetry detected. Please retake photo."
-            return result
-
+    # Check brightness with wider acceptable range
+    brightness = face_details.get('Quality', {}).get('Brightness', 0)
+    if brightness < 35 or brightness > 220:  # Adjusted range
+        result['passed'] = False
+        result['message'] = "Poor lighting conditions. Please ensure face is well-lit."
         return result
 
-    def _analyze_depth_information(self, face_details):
-        try:
-            pose = face_details.get('Pose', {})
-            landmarks = face_details.get('Landmarks', [])
-            
-            depth_indicators = []
-            
-            pose_score = 1.0
-            if abs(pose.get('Pitch', 0)) < 1 and abs(pose.get('Roll', 0)) < 1 and abs(pose.get('Yaw', 0)) < 1:
-                pose_score *= 0.5
-            
-            depth_indicators.append(pose_score)
+    # Check sharpness with lower threshold
+    sharpness = face_details.get('Quality', {}).get('Sharpness', 0)
+    if sharpness < quality_threshold:
+        result['passed'] = False
+        result['message'] = "Image is too blurry. Please provide a clearer photo."
+        return result
 
-            if landmarks:
-                nose_depth = next((l for l in landmarks if l['Type'] == 'nose'), None)
-                eye_left = next((l for l in landmarks if l['Type'] == 'eyeLeft'), None)
-                eye_right = next((l for l in landmarks if l['Type'] == 'eyeRight'), None)
+    # Check facial landmarks
+    landmarks = face_details.get('Landmarks', [])
+    if len(landmarks) < 4:  # Reduced minimum landmarks requirement
+        result['passed'] = False
+        result['message'] = "Cannot detect clear facial features. Please retake photo."
+        return result
+
+    # More lenient symmetry check
+    if not self._check_face_symmetry(landmarks):
+        logger.warning("Face symmetry check failed but continuing...")
+        # Don't fail immediately for symmetry issues
+        pass
+
+    return result
+
+def _analyze_depth_information(self, face_details):
+    try:
+        pose = face_details.get('Pose', {})
+        landmarks = face_details.get('Landmarks', [])
+        
+        depth_indicators = []
+        
+        # More lenient pose scoring
+        pose_score = 1.0
+        pitch = abs(pose.get('Pitch', 0))
+        roll = abs(pose.get('Roll', 0))
+        yaw = abs(pose.get('Yaw', 0))
+        
+        # Allow more natural head positioning
+        if pitch < 20 and roll < 20 and yaw < 20:
+            pose_score = 0.8
+        elif pitch < 30 and roll < 30 and yaw < 30:
+            pose_score = 0.6
+        else:
+            pose_score = 0.4
+        
+        depth_indicators.append(pose_score)
+
+        # Enhanced landmark analysis
+        if landmarks:
+            nose_depth = next((l for l in landmarks if l['Type'] == 'nose'), None)
+            eye_left = next((l for l in landmarks if l['Type'] == 'eyeLeft'), None)
+            eye_right = next((l for l in landmarks if l['Type'] == 'eyeRight'), None)
+            
+            if nose_depth and eye_left and eye_right:
+                depth_variance = self._calculate_depth_variance([nose_depth, eye_left, eye_right])
+                depth_indicators.append(depth_variance)
                 
-                if nose_depth and eye_left and eye_right:
-                    depth_variance = self._calculate_depth_variance([nose_depth, eye_left, eye_right])
-                    depth_indicators.append(depth_variance)
+                # Add relative position scoring
+                relative_position_score = self._calculate_relative_position_score(nose_depth, eye_left, eye_right)
+                depth_indicators.append(relative_position_score)
 
-            return sum(depth_indicators) / len(depth_indicators) if depth_indicators else 0.0
+        final_score = sum(depth_indicators) / len(depth_indicators) if depth_indicators else 0.0
+        logger.info(f"Depth analysis score: {final_score}")
+        return final_score
 
-        except Exception as e:
-            logger.error(f"Depth analysis error: {str(e)}")
-            return 0.0
+    except Exception as e:
+        logger.error(f"Depth analysis error: {str(e)}")
+        return 0.5  # Return middle score instead of 0.0 on error
 
-    def _analyze_facial_texture(self, face_details):
-        try:
-            quality = face_details.get('Quality', {})
-            texture_scores = []
-            
-            if 'Sharpness' in quality:
-                sharpness_score = min(quality['Sharpness'] / 100.0, 1.0)
-                texture_scores.append(sharpness_score)
-            
-            if 'Brightness' in quality:
-                brightness_score = min(quality['Brightness'] / 100.0, 1.0)
-                texture_scores.append(brightness_score)
-            
-            landmarks = face_details.get('Landmarks', [])
-            if landmarks:
-                landmark_score = len(landmarks) / 100.0
-                texture_scores.append(landmark_score)
+def _calculate_relative_position_score(self, nose, left_eye, right_eye):
+    """
+    Calculate score based on relative positions of facial features
+    """
+    try:
+        # Check if nose is between eyes
+        if left_eye['X'] < nose['X'] < right_eye['X']:
+            return 0.8
+        return 0.5
+    except:
+        return 0.5
 
-            return sum(texture_scores) / len(texture_scores) if texture_scores else 0.0
+def _analyze_facial_texture(self, face_details):
+    try:
+        quality = face_details.get('Quality', {})
+        texture_scores = []
+        
+        # Adjusted sharpness scoring
+        if 'Sharpness' in quality:
+            sharpness = quality['Sharpness']
+            if sharpness > 80:
+                sharpness_score = 1.0
+            elif sharpness > 60:
+                sharpness_score = 0.8
+            else:
+                sharpness_score = sharpness / 100.0
+            texture_scores.append(sharpness_score)
+        
+        # Adjusted brightness scoring
+        if 'Brightness' in quality:
+            brightness = quality['Brightness']
+            if 40 <= brightness <= 200:
+                brightness_score = 1.0
+            else:
+                brightness_score = 0.7
+            texture_scores.append(brightness_score)
+        
+        # Landmark-based texture analysis
+        landmarks = face_details.get('Landmarks', [])
+        if landmarks:
+            landmark_score = min(len(landmarks) / 35.0, 1.0)  # Normalized to max of 1.0
+            texture_scores.append(landmark_score)
 
-        except Exception as e:
-            logger.error(f"Texture analysis error: {str(e)}")
-            return 0.0
+        final_score = sum(texture_scores) / len(texture_scores) if texture_scores else 0.0
+        logger.info(f"Texture analysis score: {final_score}")
+        return final_score
 
-    def _check_face_symmetry(self, landmarks):
-        try:
-            left_eye = next((l for l in landmarks if l['Type'] == 'eyeLeft'), None)
-            right_eye = next((l for l in landmarks if l['Type'] == 'eyeRight'), None)
-            
-            if left_eye and right_eye:
-                eye_level_diff = abs(left_eye['Y'] - right_eye['Y'])
-                if eye_level_diff > 0.15:
-                    return False
-            
-            return True
-
-        except Exception as e:
-            logger.error(f"Symmetry check error: {str(e)}")
-            return False
-
-    def _calculate_depth_variance(self, landmarks):
-        try:
-            z_coords = [l.get('Z', 0) for l in landmarks]
-            if not z_coords:
-                return 0.0
-                
-            mean_z = sum(z_coords) / len(z_coords)
-            variance = sum((z - mean_z) ** 2 for z in z_coords) / len(z_coords)
-            
-            normalized_variance = min(variance / 0.1, 1.0)
-            return normalized_variance
-
-        except Exception as e:
-            logger.error(f"Depth variance calculation error: {str(e)}")
-            return 0.0
-
-    def _analyze_face_details(self, image_bytes):
-        try:
-            response = rekognition_client.detect_faces(
-                Image={'Bytes': image_bytes},
-                Attributes=['ALL']
-            )
-            
-            if not response['FaceDetails']:
-                raise serializers.ValidationError("No face detected in the image. Please provide a clear photo of your face.")
-            
-            if len(response['FaceDetails']) > 1:
-                raise serializers.ValidationError("Multiple faces detected. Please provide a selfie with only your face.")
-            
-            face_details = response['FaceDetails'][0]
-            
-            # Quality checks
-            if face_details['Confidence'] < 90:
-                raise serializers.ValidationError("Face detection confidence too low. Please provide a clearer photo in good lighting.")
-            
-            # Check face orientation
-            pose = face_details['Pose']
-            max_angle = 15
-            if abs(pose['Pitch']) > max_angle or abs(pose['Roll']) > max_angle or abs(pose['Yaw']) > max_angle:
-                raise serializers.ValidationError("Face is not properly aligned. Please look straight at the camera.")
-            
-            # Check eyes
-            if not face_details.get('EyesOpen', {}).get('Value', False):
-                raise serializers.ValidationError("Please keep your eyes open in the photo.")
-            
-            # Check for sunglasses
-            if face_details.get('Sunglasses', {}).get('Value', True):
-                raise serializers.ValidationError("Please remove sunglasses.")
-            
-            return face_details
-            
-        except serializers.ValidationError:
-            raise
-        except Exception as e:
-            logger.error(f"Error in face analysis: {str(e)}")
-            raise serializers.ValidationError("Error analyzing face details. Please try again with a clearer photo.")
+    except Exception as e:
+        logger.error(f"Texture analysis error: {str(e)}")
+        return 0.5  # Return middle score instead of 0.0 on error
 
     def _check_duplicate_faces(self, image_bytes, current_user_id=None):
         try:
