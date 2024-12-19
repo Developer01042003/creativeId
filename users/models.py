@@ -37,23 +37,31 @@ class CustomUser(AbstractUser):
         return self.email
 
 class UserKYC(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
-    full_name = models.CharField(max_length=100, default="none")
-    contact_number = models.CharField(max_length=15)
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    full_name = models.CharField(max_length=255)
+    contact_number = models.CharField(max_length=20)
     address = models.TextField()
-    country = models.CharField(max_length=50)
-    selfie = models.ImageField(upload_to="selfies/")
-    face_hash = models.CharField(max_length=64, null=True, blank=True)
-    image_hash = models.CharField(max_length=32, unique=True, null=True, blank=True)
-    face_embeddings = models.JSONField(null=True, blank=True)
-    s3_image_url = models.CharField(max_length=255, null=True, blank=True)  # Store S3 URL
+    country = models.CharField(max_length=100)
+    selfie = models.ImageField(upload_to='kyc_selfies/')
+    image_hash = models.CharField(max_length=64, db_index=True)
+    face_id = models.CharField(max_length=255, unique=True, db_index=True)
+    face_confidence = models.FloatField()
+    s3_image_url = models.CharField(max_length=255)
+    verification_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('PENDING', 'Pending'),
+            ('APPROVED', 'Approved'),
+            ('REJECTED', 'Rejected')
+        ],
+        default='PENDING'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    def __str__(self):
-        return f"KYC for {self.full_name} ({self.user.email})"
-
     class Meta:
-        verbose_name = "User KYC"
-        verbose_name_plural = "User KYCs"
-        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['image_hash']),
+            models.Index(fields=['face_id']),
+            models.Index(fields=['verification_status']),
+        ]
