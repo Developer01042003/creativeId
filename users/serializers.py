@@ -277,80 +277,111 @@ def _check_duplicate_faces(self, image_bytes, current_user_id=None):
             logger.error(f"Error checking duplicate faces: {str(e)}")
             raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
-    def validate_selfie(self, value):
-        try:
-            if not isinstance(value, InMemoryUploadedFile):
-                raise serializers.ValidationError("Invalid image format. Please upload a valid image file.")
+def validate_selfie(self, value):
+    try:
+        if not isinstance(value, InMemoryUploadedFile):
+            raise serializers.ValidationError("Invalid image format. Please upload a valid image file.")
 
-            # Read image data
-            image_bytes = value.read()
-            image = Image.open(io.BytesIO(image_bytes))
-            value.seek(0)
+        # Read image data
+        image_bytes = value.read()
+        image = Image.open(io.BytesIO(image_bytes))
+        value.seek(0)
 
-            # Basic image validations
-            width, height = image.size
-            if width < 200 or height < 200:
-                raise serializers.ValidationError("Image resolution too low. Minimum 200x200 pixels required.")
-
-            if value.size > 10 * 1024 * 1024:
-                raise serializers.ValidationError("Image size too large. Maximum 10MB allowed.")
-
-            if image.format.upper() not in ['JPEG', 'JPG', 'PNG']:
-                raise serializers.ValidationError("Invalid image format. Please upload a JPEG or PNG image.")
-
-            # Perform liveness check
-            self._check_liveness(image_bytes)
-            value.seek(0)
-
-            # Face analysis
-            face_details = self._analyze_face_details(image_bytes)
-            value.seek(0)
-
-            # Check for duplicates
-            is_duplicate, error_message = self._check_duplicate_faces(
-                image_bytes,
-                self.context.get('user_id')
+        # Basic image validations
+        width, height = image.size
+        if width < 200 or height < 200:
+            raise serializers.ValidationError(
+                "Image resolution too low. Minimum 200x200 pixels required."
             )
-            
-            if is_duplicate:
-                raise serializers.ValidationError(error_message)
 
-            value.seek(0)
+        # Check file size (max 10MB)
+        if value.size > 10 * 1024 * 1024:
+            raise serializers.ValidationError(
+                "Image size too large. Maximum 10MB allowed."
+            )
 
-            try:
-                # Generate unique face ID
-                image_hash = hashlib.sha256(image_bytes).hexdigest()
-                face_id = hashlib.sha256(str(image_hash).encode()).hexdigest()[:32]
-                
-                # Generate image hash and compress
-                optimized_image = self._compress_image(image)
+        # Validate image format
+        if image.format.upper() not in ['JPEG', 'JPG', 'PNG']:
+            raise serializers.ValidationError(
+                "Invalid image format. Please upload a JPEG or PNG image."
+            )
 
-                # Store metadata
-                value.face_id = face_id
-                value.image_hash = image_hash
-                value.face_confidence = face_details['Confidence']
+        # Face analysis
+        face_details = self._analyze_face_details(image_bytes)
+        value.seek(0)
 
-                # Upload to S3
-                s3_key = f"selfies/{face_id}.jpg"
-                s3_client.upload_fileobj(
-                    optimized_image, 
-                    S3_BUCKET_NAME, 
-                    s3_key,
-                    ExtraArgs={'ContentType': 'image/jpeg'}
+        # Check for duplicates
+        is_duplicate, error_message = self._check_duplicate_faces(
+            image_bytes,
+            self.context.get('user_id')
+        )
+        
+        if is_duplicate:
+            raise serializers.ValidationError(error_message)
+
+        value.seek(0)
+
+        try:
+            # Index the face
+            index_response = rekognition_client.index_faces(
+                CollectionId='user_faces_collection',
+                Image={'Bytes': image_bytes},
+                MaxFaces=1,
+                QualityFilter="HIGH",
+                DetectionAttributes=['ALL']
+            )
+
+            if not index_response.get('FaceRecords'):
+                raise serializers.ValidationError(
+                    "Failed to process face. Please try again with a clearer photo."
                 )
-                value.s3_image_url = s3_key
 
-                return value
+            face_id = index_response['FaceRecords'][0]['Face']['FaceId']
+            
+            # Generate image hash and compress
+            optimized_image = self._compress_image(image)
+            image_hash = hashlib.sha256(optimized_image.getvalue()).hexdigest()
 
-            except Exception as e:
-                logger.error(f"Error processing image: {str(e)}")
-                raise serializers.ValidationError("Error processing image. Please try again with a different photo.")
+            # Store metadata
+            value.face_id = face_id
+            value.image_hash = image_hash
+            value.face_confidence = face_details['Confidence']
 
-        except serializers.ValidationError:
-            raise
+            # Upload to S3
+            s3_key = f"selfies/{face_id}.jpg"
+            s3_client.upload_fileobj(
+                optimized_image, 
+                S3_BUCKET_NAME, 
+                s3_key,
+                ExtraArgs={'ContentType': 'image/jpeg'}
+            )
+            value.s3_image_url = s3_key
+
+            return value
+
         except Exception as e:
-            logger.error(f"Error in validate_selfie: {str(e)}")
-            raise serializers.ValidationError("Error processing image. Please try again.")
+            # Clean up indexed face if there's an error
+            if 'face_id' in locals():
+                try:
+                    rekognition_client.delete_faces(
+                        CollectionId='user_faces_collection',
+                        FaceIds=[face_id]
+                    )
+                except Exception as del_e:
+                    logger.error(f"Error cleaning up indexed face: {str(del_e)}")
+            
+            logger.error(f"Error processing image: {str(e)}")
+            raise serializers.ValidationError(
+                "Error processing image. Please try again with a different photo."
+            )
+
+    except serializers.ValidationError:
+        raise
+    except Exception as e:
+        logger.error(f"Error in validate_selfie: {str(e)}")
+        raise serializers.ValidationError(
+            "Error processing image. Please try again."
+        )
 
     def _compress_image(self, image):
         try:
