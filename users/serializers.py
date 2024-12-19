@@ -46,6 +46,18 @@ class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
+import boto3
+import io
+import hashlib
+from PIL import Image
+from django.core.cache import cache
+from rest_framework import serializers
+from django.core.files.uploadedfile import InMemoryUploadedFile
+
+# Initialize the Rekognition client
+session = boto3.Session(profile_name='default')
+rekognition_client = session.client('rekognition')
+
 class UserKYCSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserKYC
@@ -154,35 +166,23 @@ class UserKYCSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
     def _check_face_liveness(self, image_bytes):
-        """
-        Check if the image is from a live person and not a spoof attempt
-        """
         try:
-            # Detect face liveness
-            liveness_response = rekognition_client.detect_face_liveness(
-                Image={
-                    'Bytes': image_bytes
-                }
-            )
+            # Create a face liveness session
+            response = rekognition_client.create_face_liveness_session()
+            session_id = response.get("SessionId")
+            logger.info(f"Created a Face Liveness Session with ID: {session_id}")
 
-            liveness = liveness_response.get('Liveness', {})
-            confidence = liveness.get('Confidence', 0)
-            score = liveness.get('Score', 0)
+            # Get the session results
+            response = rekognition_client.get_face_liveness_session_results(SessionId=session_id)
+            confidence = response.get("Confidence")
+            status = response.get("Status")
 
-            logger.info(f"Liveness check - Confidence: {confidence}, Score: {score}")
+            logger.info(f"Liveness check - Confidence: {confidence}, Status: {status}")
 
-            # Strict thresholds for liveness detection
-            CONFIDENCE_THRESHOLD = 90
-            SCORE_THRESHOLD = 0.9
-
-            if confidence < CONFIDENCE_THRESHOLD:
+            # Check the status and confidence
+            if status != 'SUCCEEDED' or confidence < 90:
                 raise serializers.ValidationError(
                     "Unable to verify if this is a live photo. Please ensure you're taking a real-time photo."
-                )
-
-            if score < SCORE_THRESHOLD:
-                raise serializers.ValidationError(
-                    "This appears to be a spoofed image. Please provide a real-time photo capture."
                 )
 
             return True
