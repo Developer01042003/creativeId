@@ -216,7 +216,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             logger.error(f"Texture analysis error: {str(e)}")
             return 0.5
 
-    def _check_duplicate_faces(self, image_bytes, current_user_id=None):
+def _check_duplicate_faces(self, image_bytes, current_user_id=None):
         try:
             # Try to create collection if it doesn't exist
             try:
@@ -226,7 +226,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
                 pass
             except Exception as e:
                 logger.error(f"Error with collection: {str(e)}")
-                return False, ""  # More permissive error handling
+                raise serializers.ValidationError("Error initializing face detection system")
 
             # Search for face in collection
             try:
@@ -245,11 +245,37 @@ class UserKYCSerializer(serializers.ModelSerializer):
                 logger.warning("No faces found during duplicate check")
                 pass
 
+            # Compare with existing images
+            existing_kycs = UserKYC.objects.exclude(user_id=current_user_id)
+            for existing_kyc in existing_kycs:
+                if not existing_kyc.s3_image_url:
+                    continue
+                    
+                try:
+                    compare_response = rekognition_client.compare_faces(
+                        SourceImage={'Bytes': image_bytes},
+                        TargetImage={'S3Object': {
+                            'Bucket': S3_BUCKET_NAME,
+                            'Name': existing_kyc.s3_image_url
+                        }},
+                        SimilarityThreshold=90
+                    )
+                    
+                    if compare_response.get('FaceMatches'):
+                        logger.warning("Duplicate face found in direct comparison")
+                        return True, "This face matches an existing user's verification photo."
+                        
+                except Exception as e:
+                    logger.error(f"Error comparing faces: {str(e)}")
+                    continue
+            
             return False, ""
             
+        except serializers.ValidationError:
+            raise
         except Exception as e:
             logger.error(f"Error checking duplicate faces: {str(e)}")
-            return False, ""  # More permissive error handling
+            raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
     def validate_selfie(self, value):
         try:
