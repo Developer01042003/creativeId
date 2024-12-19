@@ -166,7 +166,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
     def _check_face_liveness(self, image_bytes):
     try:
-        # Use detect_faces instead of liveness session
+        # Basic face detection
         response = rekognition_client.detect_faces(
             Image={'Bytes': image_bytes},
             Attributes=['ALL']
@@ -174,72 +174,43 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
         if not response.get('FaceDetails'):
             raise serializers.ValidationError(
-                "No face detected. Please take a clear, direct photo of your face."
+                "No face detected. Please take a clear photo of your face."
             )
 
         face_details = response['FaceDetails'][0]
-        quality = face_details.get('Quality', {})
 
-        # Enhanced quality checks
-        brightness = quality.get('Brightness', 0)
-        sharpness = quality.get('Sharpness', 0)
+        # Basic quality checks
+        quality = face_details.get('Quality', {})
         confidence = face_details.get('Confidence', 0)
 
-        # Check for screen capture indicators
-        if brightness > 90:
+        # More lenient thresholds
+        if confidence < 80:  # Reduced from 90
             raise serializers.ValidationError(
-                "Unusual brightness detected. Please take a direct photo instead of capturing from a screen."
+                "Please take a clearer photo of your face."
             )
 
-        if brightness < 30:
-            raise serializers.ValidationError(
-                "Image too dark. Please take photo in better lighting."
-            )
-
-        if sharpness < 50:
-            raise serializers.ValidationError(
-                "Image not clear enough. Please take a direct photo instead of capturing from another photo or screen."
-            )
-
-        if confidence < 90:
-            raise serializers.ValidationError(
-                "Low quality face detection. Please take a clear, direct photo."
-            )
-
-        # Check image properties
-        image = Image.open(io.BytesIO(image_bytes))
-        
-        # Convert to grayscale for analysis
-        gray_image = image.convert('L')
-        extrema = gray_image.getextrema()
-        
-        # Check contrast range (screen captures often have limited range)
-        if extrema[1] - extrema[0] < 50:
-            raise serializers.ValidationError(
-                "Poor image quality detected. Please take a direct photo instead of capturing from a screen."
-            )
-
-        # Additional checks from face_details
+        # Check basic face attributes
         if face_details.get('Sunglasses', {}).get('Value', False):
             raise serializers.ValidationError(
-                "Please remove sunglasses and take a direct photo."
+                "Please remove sunglasses."
             )
 
         if not face_details.get('EyesOpen', {}).get('Value', False):
             raise serializers.ValidationError(
-                "Please keep your eyes open while taking the photo."
+                "Please keep your eyes open."
             )
 
-        # Check face orientation
+        # Check face orientation with more lenient angles
         pose = face_details.get('Pose', {})
-        max_angle = 15
+        max_angle = 20  # Increased from 15
         if (abs(pose.get('Pitch', 0)) > max_angle or 
             abs(pose.get('Roll', 0)) > max_angle or 
             abs(pose.get('Yaw', 0)) > max_angle):
             raise serializers.ValidationError(
-                "Please look directly at the camera with your face straight."
+                "Please look directly at the camera."
             )
 
+        # If all checks pass, consider it a valid photo
         return True
 
     except serializers.ValidationError:
@@ -247,7 +218,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
     except Exception as e:
         logger.error(f"Error in liveness detection: {str(e)}")
         raise serializers.ValidationError(
-            "Unable to verify photo authenticity. Please take a direct photo instead of capturing from a screen or another photo."
+            "Unable to verify photo. Please take a clear photo in good lighting."
         )
 
     def validate_selfie(self, value):
