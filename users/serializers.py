@@ -56,35 +56,35 @@ class UserKYCSerializer(serializers.ModelSerializer):
                 Image={'Bytes': image_bytes},
                 Attributes=['ALL']
             )
-            
+
             if not response['FaceDetails']:
                 raise serializers.ValidationError("No face detected in the image. Please provide a clear photo of your face.")
-            
+
             if len(response['FaceDetails']) > 1:
                 raise serializers.ValidationError("Multiple faces detected. Please provide a selfie with only your face.")
-            
+
             face_details = response['FaceDetails'][0]
-            
+
             # Quality checks
             if face_details['Confidence'] < 70:
                 raise serializers.ValidationError("Face detection confidence too low. Please provide a clearer photo in good lighting.")
-            
+
             # Check face orientation
             pose = face_details['Pose']
             max_angle = 15
             if abs(pose['Pitch']) > max_angle or abs(pose['Roll']) > max_angle or abs(pose['Yaw']) > max_angle:
                 raise serializers.ValidationError("Face is not properly aligned. Please look straight at the camera.")
-            
+
             # Check eyes
             if not face_details.get('EyesOpen', {}).get('Value', False):
                 raise serializers.ValidationError("Please keep your eyes open in the photo.")
-            
+
             # Check for sunglasses
             if face_details.get('Sunglasses', {}).get('Value', True):
                 raise serializers.ValidationError("Please remove sunglasses.")
-            
+
             return face_details
-            
+
         except serializers.ValidationError:
             raise
         except Exception as e:
@@ -111,11 +111,11 @@ class UserKYCSerializer(serializers.ModelSerializer):
                     MaxFaces=1,
                     FaceMatchThreshold=90
                 )
-                
+
                 if search_response.get('FaceMatches'):
                     logger.warning("Duplicate face found in collection")
                     return True, "This face has already been registered in our system."
-                    
+
             except rekognition_client.exceptions.InvalidParameterException:
                 logger.warning("No faces found during duplicate check")
                 pass
@@ -125,7 +125,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             for existing_kyc in existing_kycs:
                 if not existing_kyc.s3_image_url:
                     continue
-                    
+
                 try:
                     compare_response = rekognition_client.compare_faces(
                         SourceImage={'Bytes': image_bytes},
@@ -135,17 +135,17 @@ class UserKYCSerializer(serializers.ModelSerializer):
                         }},
                         SimilarityThreshold=90
                     )
-                    
+
                     if compare_response.get('FaceMatches'):
                         logger.warning("Duplicate face found in direct comparison")
                         return True, "This face matches an existing user's verification photo."
-                        
+
                 except Exception as e:
                     logger.error(f"Error comparing faces: {str(e)}")
                     continue
-            
+
             return False, ""
-            
+
         except serializers.ValidationError:
             raise
         except Exception as e:
@@ -153,167 +153,167 @@ class UserKYCSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
     def _check_face_liveness(self, image_bytes):
-    """
-    Check if the image is from a live person and not a spoof attempt
-    """
-    try:
-        # Detect face liveness
-        liveness_response = rekognition_client.detect_face_liveness(
-            Image={
-                'Bytes': image_bytes
-            }
-        )
-        
-        liveness = liveness_response.get('Liveness', {})
-        confidence = liveness.get('Confidence', 0)
-        score = liveness.get('Score', 0)
-        
-        logger.info(f"Liveness check - Confidence: {confidence}, Score: {score}")
-        
-        # Strict thresholds for liveness detection
-        CONFIDENCE_THRESHOLD = 90
-        SCORE_THRESHOLD = 0.9
-        
-        if confidence < CONFIDENCE_THRESHOLD:
-            raise serializers.ValidationError(
-                "Unable to verify if this is a live photo. Please ensure you're taking a real-time photo."
-            )
-            
-        if score < SCORE_THRESHOLD:
-            raise serializers.ValidationError(
-                "This appears to be a spoofed image. Please provide a real-time photo capture."
-            )
-
-        return True
-
-    except Exception as e:
-        logger.error(f"Error in liveness detection: {str(e)}")
-        raise serializers.ValidationError("Unable to verify photo authenticity. Please try again.")
-
-def validate_selfie(self, value):
-    try:
-        if not isinstance(value, InMemoryUploadedFile):
-            raise serializers.ValidationError("Invalid image format. Please upload a valid image file.")
-
-        # Read image data
-        image_bytes = value.read()
-        image = Image.open(io.BytesIO(image_bytes))
-        value.seek(0)
-
-        # Basic image validations
-        width, height = image.size
-        if width < 200 or height < 200:
-            raise serializers.ValidationError(
-                "Image resolution too low. Minimum 200x200 pixels required."
-            )
-
-        # Check file size (max 10MB)
-        if value.size > 10 * 1024 * 1024:
-            raise serializers.ValidationError(
-                "Image size too large. Maximum 10MB allowed."
-            )
-
-        # Validate image format
-        if image.format.upper() not in ['JPEG', 'JPG', 'PNG']:
-            raise serializers.ValidationError(
-                "Invalid image format. Please upload a JPEG or PNG image."
-            )
-
-        # Add rate limiting check
-        user_id = self.context.get('user_id')
-        cache_key = f'liveness_check_{user_id}'
-        if cache.get(cache_key):
-            raise serializers.ValidationError(
-                "Please wait 30 seconds before trying another photo upload."
-            )
-        cache.set(cache_key, True, 30)
-
-        # Check face liveness first
-        is_live = self._check_face_liveness(image_bytes)
-        value.seek(0)
-
-        if not is_live:
-            raise serializers.ValidationError(
-                "Unable to verify photo authenticity. Please take a real-time photo."
-            )
-
-        # Continue with existing validations
-        face_details = self._analyze_face_details(image_bytes)
-        value.seek(0)
-
-        # Check for duplicates
-        is_duplicate, error_message = self._check_duplicate_faces(
-            image_bytes,
-            self.context.get('user_id')
-        )
-        
-        if is_duplicate:
-            raise serializers.ValidationError(error_message)
-
-        value.seek(0)
-
+        """
+        Check if the image is from a live person and not a spoof attempt
+        """
         try:
-            # Index the face
-            index_response = rekognition_client.index_faces(
-                CollectionId='user_faces_collection',
-                Image={'Bytes': image_bytes},
-                MaxFaces=1,
-                QualityFilter="HIGH",
-                DetectionAttributes=['ALL']
+            # Detect face liveness
+            liveness_response = rekognition_client.detect_face_liveness(
+                Image={
+                    'Bytes': image_bytes
+                }
             )
 
-            if not index_response.get('FaceRecords'):
+            liveness = liveness_response.get('Liveness', {})
+            confidence = liveness.get('Confidence', 0)
+            score = liveness.get('Score', 0)
+
+            logger.info(f"Liveness check - Confidence: {confidence}, Score: {score}")
+
+            # Strict thresholds for liveness detection
+            CONFIDENCE_THRESHOLD = 90
+            SCORE_THRESHOLD = 0.9
+
+            if confidence < CONFIDENCE_THRESHOLD:
                 raise serializers.ValidationError(
-                    "Failed to process face. Please try again with a clearer photo."
+                    "Unable to verify if this is a live photo. Please ensure you're taking a real-time photo."
                 )
 
-            face_id = index_response['FaceRecords'][0]['Face']['FaceId']
-            
-            # Generate image hash and compress
-            optimized_image = self._compress_image(image)
-            image_hash = hashlib.sha256(optimized_image.getvalue()).hexdigest()
+            if score < SCORE_THRESHOLD:
+                raise serializers.ValidationError(
+                    "This appears to be a spoofed image. Please provide a real-time photo capture."
+                )
 
-            # Store metadata
-            value.face_id = face_id
-            value.image_hash = image_hash
-            value.face_confidence = face_details['Confidence']
-
-            # Upload to S3
-            s3_key = f"selfies/{face_id}.jpg"
-            s3_client.upload_fileobj(
-                optimized_image, 
-                S3_BUCKET_NAME, 
-                s3_key,
-                ExtraArgs={'ContentType': 'image/jpeg'}
-            )
-            value.s3_image_url = s3_key
-
-            return value
+            return True
 
         except Exception as e:
-            # Clean up indexed face if there's an error
-            if 'face_id' in locals():
-                try:
-                    rekognition_client.delete_faces(
-                        CollectionId='user_faces_collection',
-                        FaceIds=[face_id]
-                    )
-                except Exception as del_e:
-                    logger.error(f"Error cleaning up indexed face: {str(del_e)}")
-            
-            logger.error(f"Error processing image: {str(e)}")
-            raise serializers.ValidationError(
-                "Error processing image. Please try again with a different photo."
+            logger.error(f"Error in liveness detection: {str(e)}")
+            raise serializers.ValidationError("Unable to verify photo authenticity. Please try again.")
+
+    def validate_selfie(self, value):
+        try:
+            if not isinstance(value, InMemoryUploadedFile):
+                raise serializers.ValidationError("Invalid image format. Please upload a valid image file.")
+
+            # Read image data
+            image_bytes = value.read()
+            image = Image.open(io.BytesIO(image_bytes))
+            value.seek(0)
+
+            # Basic image validations
+            width, height = image.size
+            if width < 200 or height < 200:
+                raise serializers.ValidationError(
+                    "Image resolution too low. Minimum 200x200 pixels required."
+                )
+
+            # Check file size (max 10MB)
+            if value.size > 10 * 1024 * 1024:
+                raise serializers.ValidationError(
+                    "Image size too large. Maximum 10MB allowed."
+                )
+
+            # Validate image format
+            if image.format.upper() not in ['JPEG', 'JPG', 'PNG']:
+                raise serializers.ValidationError(
+                    "Invalid image format. Please upload a JPEG or PNG image."
+                )
+
+            # Add rate limiting check
+            user_id = self.context.get('user_id')
+            cache_key = f'liveness_check_{user_id}'
+            if cache.get(cache_key):
+                raise serializers.ValidationError(
+                    "Please wait 30 seconds before trying another photo upload."
+                )
+            cache.set(cache_key, True, 30)
+
+            # Check face liveness first
+            is_live = self._check_face_liveness(image_bytes)
+            value.seek(0)
+
+            if not is_live:
+                raise serializers.ValidationError(
+                    "Unable to verify photo authenticity. Please take a real-time photo."
+                )
+
+            # Continue with existing validations
+            face_details = self._analyze_face_details(image_bytes)
+            value.seek(0)
+
+            # Check for duplicates
+            is_duplicate, error_message = self._check_duplicate_faces(
+                image_bytes,
+                self.context.get('user_id')
             )
 
-    except serializers.ValidationError:
-        raise
-    except Exception as e:
-        logger.error(f"Error in validate_selfie: {str(e)}")
-        raise serializers.ValidationError(
-            "Error processing image. Please try again."
-        )
-        
+            if is_duplicate:
+                raise serializers.ValidationError(error_message)
+
+            value.seek(0)
+
+            try:
+                # Index the face
+                index_response = rekognition_client.index_faces(
+                    CollectionId='user_faces_collection',
+                    Image={'Bytes': image_bytes},
+                    MaxFaces=1,
+                    QualityFilter="HIGH",
+                    DetectionAttributes=['ALL']
+                )
+
+                if not index_response.get('FaceRecords'):
+                    raise serializers.ValidationError(
+                        "Failed to process face. Please try again with a clearer photo."
+                    )
+
+                face_id = index_response['FaceRecords'][0]['Face']['FaceId']
+
+                # Generate image hash and compress
+                optimized_image = self._compress_image(image)
+                image_hash = hashlib.sha256(optimized_image.getvalue()).hexdigest()
+
+                # Store metadata
+                value.face_id = face_id
+                value.image_hash = image_hash
+                value.face_confidence = face_details['Confidence']
+
+                # Upload to S3
+                s3_key = f"selfies/{face_id}.jpg"
+                s3_client.upload_fileobj(
+                    optimized_image,
+                    S3_BUCKET_NAME,
+                    s3_key,
+                    ExtraArgs={'ContentType': 'image/jpeg'}
+                )
+                value.s3_image_url = s3_key
+
+                return value
+
+            except Exception as e:
+                # Clean up indexed face if there's an error
+                if 'face_id' in locals():
+                    try:
+                        rekognition_client.delete_faces(
+                            CollectionId='user_faces_collection',
+                            FaceIds=[face_id]
+                        )
+                    except Exception as del_e:
+                        logger.error(f"Error cleaning up indexed face: {str(del_e)}")
+
+                logger.error(f"Error processing image: {str(e)}")
+                raise serializers.ValidationError(
+                    "Error processing image. Please try again with a different photo."
+                )
+
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in validate_selfie: {str(e)}")
+            raise serializers.ValidationError(
+                "Error processing image. Please try again."
+            )
+
     def _compress_image(self, image):
         try:
             # Convert to RGB if necessary
@@ -348,7 +348,7 @@ def validate_selfie(self, value):
                     )
                 except Exception as e:
                     logger.error(f"Error cleaning up face index: {str(e)}")
-                
+
                 raise serializers.ValidationError(
                     "This face has already been registered in our system."
                 )
@@ -378,5 +378,5 @@ def validate_selfie(self, value):
                     )
                 except Exception as del_e:
                     logger.error(f"Error cleaning up face index: {str(del_e)}")
-            
+
             raise serializers.ValidationError("Error creating KYC record. Please try again.")
