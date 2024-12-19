@@ -1,6 +1,23 @@
 from rest_framework import serializers
 from .models import CustomUser, UserKYC
 
+import boto3
+import os
+
+s3_client = boto3.client(
+    's3',
+    region_name='us-east-1',
+    aws_access_key_id='AKIAUZPNLWACTQ4UERLU',
+    aws_secret_access_key='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'
+)
+
+rekognition_client = boto3.client(
+    'rekognition',
+    region_name='us-east-1',
+    aws_access_key_id='AKIAUZPNLWACTQ4UERLU',
+    aws_secret_access_key='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'
+)
+
 class SignupSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
     
@@ -35,8 +52,7 @@ from .models import UserKYC
 logger = logging.getLogger(__name__)
 
 # Initialize the Rekognition and S3 clients
-rekognition_client = boto3.client('rekognition')
-s3_client = boto3.client('s3')
+
 
 # Define your S3 bucket name
 S3_BUCKET_NAME = 'imagingkyc'
