@@ -47,6 +47,7 @@ import logging
 import boto3
 from PIL import Image
 from rest_framework import serializers
+from django.core.files.uploadedfile import InMemoryUploadedFile
 from .models import UserKYC
 
 logger = logging.getLogger(__name__)
@@ -158,4 +159,3 @@ class UserKYCSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
         return instance
-
