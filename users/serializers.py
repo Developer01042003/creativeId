@@ -31,16 +31,17 @@ from PIL import Image, ImageEnhance
 from rest_framework import serializers
 from .models import UserKYC
 import io
-from django.core.files.uploadedfile import InMemoryUploadedFile
 import logging
 import imagehash
+from django.core.files.uploadedfile import InMemoryUploadedFile
+from deepface import DeepFace
 
 logger = logging.getLogger(__name__)
 
 class UserKYCSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserKYC
-        fields = ['full_name', 'contact_number', 'address', 'country', 'selfie']
+        fields = ['user', 'full_name', 'contact_number', 'address', 'country', 'selfie']
 
     def validate_selfie(self, value):
         try:
@@ -50,7 +51,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
                 image = Image.open(io.BytesIO(image_bytes))
             else:
                 raise serializers.ValidationError("Invalid image format")
-            
+
             img = np.array(image)
             if img is None:
                 raise serializers.ValidationError("Unable to process image")
@@ -192,37 +193,37 @@ class UserKYCSerializer(serializers.ModelSerializer):
         value.seek(0)  # Reset file pointer again for saving
         return value
 
-def create(self, validated_data):
-    # Ensure we store the 'face_hash' if it was generated
-    image_hash = validated_data.get('selfie').image_hash
-    face_hash = validated_data.get('selfie').face_hash  # Get face_hash from the selfie image
-
-    if UserKYC.objects.filter(image_hash=image_hash).exists():
-        raise serializers.ValidationError("This image has already been used. Please upload a different image.")
-
-    # Create the UserKYC instance
-    kyc = UserKYC.objects.create(**validated_data)
-    kyc.image_hash = image_hash
-    kyc.face_hash = face_hash  # Save the face_hash
-    kyc.save()
-
-    return kyc
-
-def update(self, instance, validated_data):
-    # If there's a new selfie, check for duplicates again
-    if 'selfie' in validated_data:
-        image_hash = validated_data['selfie'].image_hash
-        face_hash = validated_data['selfie'].face_hash  # Get the face hash for the updated selfie
+    def create(self, validated_data):
+        # Ensure we store the 'face_hash' if it was generated
+        image_hash = validated_data.get('selfie').image_hash
+        face_hash = validated_data.get('selfie').face_hash  # Get face_hash from the selfie image
 
         if UserKYC.objects.filter(image_hash=image_hash).exists():
             raise serializers.ValidationError("This image has already been used. Please upload a different image.")
-        
-        # Update the hash if the image is new
-        instance.image_hash = image_hash
-        instance.face_hash = face_hash  # Update the face_hash as well
 
-    for attr, value in validated_data.items():
-        setattr(instance, attr, value)
-    instance.save()
-    return instance
+        # Create the UserKYC instance
+        kyc = UserKYC.objects.create(**validated_data)
+        kyc.image_hash = image_hash
+        kyc.face_hash = face_hash  # Save the face_hash
+        kyc.save()
+
+        return kyc
+
+    def update(self, instance, validated_data):
+        # If there's a new selfie, check for duplicates again
+        if 'selfie' in validated_data:
+            image_hash = validated_data['selfie'].image_hash
+            face_hash = validated_data['selfie'].face_hash  # Get the face hash for the updated selfie
+
+            if UserKYC.objects.filter(image_hash=image_hash).exists():
+                raise serializers.ValidationError("This image has already been used. Please upload a different image.")
+            
+            # Update the hash if the image is new
+            instance.image_hash = image_hash
+            instance.face_hash = face_hash  # Update the face_hash as well
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
 
