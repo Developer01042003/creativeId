@@ -62,7 +62,10 @@ class UserKYCSerializer(serializers.ModelSerializer):
         model = UserKYC
         fields = ['full_name', 'contact_number', 'address', 'country', 'selfie']
 
-    def _analyze_face_details(self, image_bytes):
+    def _check_liveness(self, image_bytes):
+        """
+        Enhanced liveness detection using multiple methods
+        """
         try:
             response = rekognition_client.detect_faces(
                 Image={'Bytes': image_bytes},
@@ -70,40 +73,186 @@ class UserKYCSerializer(serializers.ModelSerializer):
             )
 
             if not response['FaceDetails']:
-                raise serializers.ValidationError("No face detected in the image. Please provide a clear photo of your face.")
-
-            if len(response['FaceDetails']) > 1:
-                raise serializers.ValidationError("Multiple faces detected. Please provide a selfie with only your face.")
+                raise serializers.ValidationError("No face detected for liveness check.")
 
             face_details = response['FaceDetails'][0]
 
-            # Quality checks
-            if face_details['Confidence'] < 70:
-                raise serializers.ValidationError("Face detection confidence too low. Please provide a clearer photo in good lighting.")
+            # Quality and Lighting Checks
+            quality_checks = self._perform_quality_checks(face_details)
+            if not quality_checks['passed']:
+                raise serializers.ValidationError(quality_checks['message'])
 
+            # Depth Analysis
+            depth_score = self._analyze_depth_information(face_details)
+            if depth_score < 0.8:
+                raise serializers.ValidationError("Image appears to be from a flat surface. Please use a real face.")
+
+            # Texture Analysis
+            texture_score = self._analyze_facial_texture(face_details)
+            if texture_score < 0.75:
+                raise serializers.ValidationError("Unusual facial texture detected. Please ensure this is a live face.")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Liveness check error: {str(e)}")
+            raise serializers.ValidationError("Failed to verify face liveness. Please try again.")
+
+    def _perform_quality_checks(self, face_details):
+        quality_threshold = 80
+        result = {'passed': True, 'message': ''}
+
+        brightness = face_details.get('Quality', {}).get('Brightness', 0)
+        if brightness < 40 or brightness > 200:
+            result['passed'] = False
+            result['message'] = "Poor lighting conditions. Please ensure face is well-lit."
+            return result
+
+        sharpness = face_details.get('Quality', {}).get('Sharpness', 0)
+        if sharpness < quality_threshold:
+            result['passed'] = False
+            result['message'] = "Image is too blurry. Please provide a clearer photo."
+            return result
+
+        landmarks = face_details.get('Landmarks', [])
+        if len(landmarks) < 5:
+            result['passed'] = False
+            result['message'] = "Cannot detect clear facial features. Please retake photo."
+            return result
+
+        if not self._check_face_symmetry(landmarks):
+            result['passed'] = False
+            result['message'] = "Unusual facial symmetry detected. Please retake photo."
+            return result
+
+        return result
+
+    def _analyze_depth_information(self, face_details):
+        try:
+            pose = face_details.get('Pose', {})
+            landmarks = face_details.get('Landmarks', [])
+            
+            depth_indicators = []
+            
+            pose_score = 1.0
+            if abs(pose.get('Pitch', 0)) < 1 and abs(pose.get('Roll', 0)) < 1 and abs(pose.get('Yaw', 0)) < 1:
+                pose_score *= 0.5
+            
+            depth_indicators.append(pose_score)
+
+            if landmarks:
+                nose_depth = next((l for l in landmarks if l['Type'] == 'nose'), None)
+                eye_left = next((l for l in landmarks if l['Type'] == 'eyeLeft'), None)
+                eye_right = next((l for l in landmarks if l['Type'] == 'eyeRight'), None)
+                
+                if nose_depth and eye_left and eye_right:
+                    depth_variance = self._calculate_depth_variance([nose_depth, eye_left, eye_right])
+                    depth_indicators.append(depth_variance)
+
+            return sum(depth_indicators) / len(depth_indicators) if depth_indicators else 0.0
+
+        except Exception as e:
+            logger.error(f"Depth analysis error: {str(e)}")
+            return 0.0
+
+    def _analyze_facial_texture(self, face_details):
+        try:
+            quality = face_details.get('Quality', {})
+            texture_scores = []
+            
+            if 'Sharpness' in quality:
+                sharpness_score = min(quality['Sharpness'] / 100.0, 1.0)
+                texture_scores.append(sharpness_score)
+            
+            if 'Brightness' in quality:
+                brightness_score = min(quality['Brightness'] / 100.0, 1.0)
+                texture_scores.append(brightness_score)
+            
+            landmarks = face_details.get('Landmarks', [])
+            if landmarks:
+                landmark_score = len(landmarks) / 100.0
+                texture_scores.append(landmark_score)
+
+            return sum(texture_scores) / len(texture_scores) if texture_scores else 0.0
+
+        except Exception as e:
+            logger.error(f"Texture analysis error: {str(e)}")
+            return 0.0
+
+    def _check_face_symmetry(self, landmarks):
+        try:
+            left_eye = next((l for l in landmarks if l['Type'] == 'eyeLeft'), None)
+            right_eye = next((l for l in landmarks if l['Type'] == 'eyeRight'), None)
+            
+            if left_eye and right_eye:
+                eye_level_diff = abs(left_eye['Y'] - right_eye['Y'])
+                if eye_level_diff > 0.15:
+                    return False
+            
+            return True
+
+        except Exception as e:
+            logger.error(f"Symmetry check error: {str(e)}")
+            return False
+
+    def _calculate_depth_variance(self, landmarks):
+        try:
+            z_coords = [l.get('Z', 0) for l in landmarks]
+            if not z_coords:
+                return 0.0
+                
+            mean_z = sum(z_coords) / len(z_coords)
+            variance = sum((z - mean_z) ** 2 for z in z_coords) / len(z_coords)
+            
+            normalized_variance = min(variance / 0.1, 1.0)
+            return normalized_variance
+
+        except Exception as e:
+            logger.error(f"Depth variance calculation error: {str(e)}")
+            return 0.0
+
+    def _analyze_face_details(self, image_bytes):
+        try:
+            response = rekognition_client.detect_faces(
+                Image={'Bytes': image_bytes},
+                Attributes=['ALL']
+            )
+            
+            if not response['FaceDetails']:
+                raise serializers.ValidationError("No face detected in the image. Please provide a clear photo of your face.")
+            
+            if len(response['FaceDetails']) > 1:
+                raise serializers.ValidationError("Multiple faces detected. Please provide a selfie with only your face.")
+            
+            face_details = response['FaceDetails'][0]
+            
+            # Quality checks
+            if face_details['Confidence'] < 90:
+                raise serializers.ValidationError("Face detection confidence too low. Please provide a clearer photo in good lighting.")
+            
             # Check face orientation
             pose = face_details['Pose']
             max_angle = 15
             if abs(pose['Pitch']) > max_angle or abs(pose['Roll']) > max_angle or abs(pose['Yaw']) > max_angle:
                 raise serializers.ValidationError("Face is not properly aligned. Please look straight at the camera.")
-
+            
             # Check eyes
             if not face_details.get('EyesOpen', {}).get('Value', False):
                 raise serializers.ValidationError("Please keep your eyes open in the photo.")
-
+            
             # Check for sunglasses
             if face_details.get('Sunglasses', {}).get('Value', True):
                 raise serializers.ValidationError("Please remove sunglasses.")
-
+            
             return face_details
-
+            
         except serializers.ValidationError:
             raise
         except Exception as e:
             logger.error(f"Error in face analysis: {str(e)}")
             raise serializers.ValidationError("Error analyzing face details. Please try again with a clearer photo.")
 
-def _check_duplicate_faces(self, image_bytes, current_user_id=None):
+    def _check_duplicate_faces(self, image_bytes, current_user_id=None):
         try:
             # Try to create collection if it doesn't exist
             try:
@@ -163,63 +312,6 @@ def _check_duplicate_faces(self, image_bytes, current_user_id=None):
         except Exception as e:
             logger.error(f"Error checking duplicate faces: {str(e)}")
             raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
-            
-def _check_face_liveness(self, image_bytes):
-    try:
-        # Basic face detection
-        response = rekognition_client.detect_faces(
-            Image={'Bytes': image_bytes},
-            Attributes=['ALL']
-        )
-
-        if not response.get('FaceDetails'):
-            raise serializers.ValidationError(
-                "No face detected. Please take a clear photo of your face."
-            )
-
-        face_details = response['FaceDetails'][0]
-
-        # Basic quality checks
-        quality = face_details.get('Quality', {})
-        confidence = face_details.get('Confidence', 0)
-
-        # More lenient thresholds
-        if confidence < 80:  # Reduced from 90
-            raise serializers.ValidationError(
-                "Please take a clearer photo of your face."
-            )
-
-        # Check basic face attributes
-        if face_details.get('Sunglasses', {}).get('Value', False):
-            raise serializers.ValidationError(
-                "Please remove sunglasses."
-            )
-
-        if not face_details.get('EyesOpen', {}).get('Value', False):
-            raise serializers.ValidationError(
-                "Please keep your eyes open."
-            )
-
-        # Check face orientation with more lenient angles
-        pose = face_details.get('Pose', {})
-        max_angle = 20  # Increased from 15
-        if (abs(pose.get('Pitch', 0)) > max_angle or 
-            abs(pose.get('Roll', 0)) > max_angle or 
-            abs(pose.get('Yaw', 0)) > max_angle):
-            raise serializers.ValidationError(
-                "Please look directly at the camera."
-            )
-
-        # If all checks pass, consider it a valid photo
-        return True
-
-    except serializers.ValidationError:
-        raise
-    except Exception as e:
-        logger.error(f"Error in liveness detection: {str(e)}")
-        raise serializers.ValidationError(
-            "Unable to verify photo. Please take a clear photo in good lighting."
-        )
 
     def validate_selfie(self, value):
         try:
@@ -250,25 +342,12 @@ def _check_face_liveness(self, image_bytes):
                     "Invalid image format. Please upload a JPEG or PNG image."
                 )
 
-            # Add rate limiting check
-            user_id = self.context.get('user_id')
-            cache_key = f'liveness_check_{user_id}'
-            if cache.get(cache_key):
-                raise serializers.ValidationError(
-                    "Please wait 30 seconds before trying another photo upload."
-                )
-            cache.set(cache_key, True, 30)
-
-            # Check face liveness first
-            is_live = self._check_face_liveness(image_bytes)
+            # Perform liveness check
+            if not self._check_liveness(image_bytes):
+                raise serializers.ValidationError("Failed liveness check. Please provide a live face photo.")
             value.seek(0)
 
-            if not is_live:
-                raise serializers.ValidationError(
-                    "Unable to verify photo authenticity. Please take a real-time photo."
-                )
-
-            # Continue with existing validations
+            # Face analysis
             face_details = self._analyze_face_details(image_bytes)
             value.seek(0)
 
@@ -277,7 +356,7 @@ def _check_face_liveness(self, image_bytes):
                 image_bytes,
                 self.context.get('user_id')
             )
-
+            
             if is_duplicate:
                 raise serializers.ValidationError(error_message)
 
@@ -299,7 +378,7 @@ def _check_face_liveness(self, image_bytes):
                     )
 
                 face_id = index_response['FaceRecords'][0]['Face']['FaceId']
-
+                
                 # Generate image hash and compress
                 optimized_image = self._compress_image(image)
                 image_hash = hashlib.sha256(optimized_image.getvalue()).hexdigest()
@@ -312,8 +391,8 @@ def _check_face_liveness(self, image_bytes):
                 # Upload to S3
                 s3_key = f"selfies/{face_id}.jpg"
                 s3_client.upload_fileobj(
-                    optimized_image,
-                    S3_BUCKET_NAME,
+                    optimized_image, 
+                    S3_BUCKET_NAME, 
                     s3_key,
                     ExtraArgs={'ContentType': 'image/jpeg'}
                 )
@@ -331,7 +410,7 @@ def _check_face_liveness(self, image_bytes):
                         )
                     except Exception as del_e:
                         logger.error(f"Error cleaning up indexed face: {str(del_e)}")
-
+                
                 logger.error(f"Error processing image: {str(e)}")
                 raise serializers.ValidationError(
                     "Error processing image. Please try again with a different photo."
@@ -379,7 +458,7 @@ def _check_face_liveness(self, image_bytes):
                     )
                 except Exception as e:
                     logger.error(f"Error cleaning up face index: {str(e)}")
-
+                
                 raise serializers.ValidationError(
                     "This face has already been registered in our system."
                 )
@@ -409,5 +488,5 @@ def _check_face_liveness(self, image_bytes):
                     )
                 except Exception as del_e:
                     logger.error(f"Error cleaning up face index: {str(del_e)}")
-
+            
             raise serializers.ValidationError("Error creating KYC record. Please try again.")
