@@ -11,6 +11,8 @@ opencv-python==4.10.0.84
 opencv-python-headless==4.10.0.84
 packaging==24.2
 pillow
+boto3
+django-storages
 tensorflow
 mtcnn
 tf-keras
