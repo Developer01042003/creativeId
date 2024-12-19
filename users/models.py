@@ -56,7 +56,7 @@ class UserKYC(models.Model):
         on_delete=models.CASCADE, 
         related_name='kyc_profile'
     )
-    full_name = models.CharField(max_length=255)
+    full_name = models.CharField(max_length=255,default="one")
     contact_number = models.CharField(max_length=20)
     address = models.TextField()
     country = models.CharField(max_length=100)
