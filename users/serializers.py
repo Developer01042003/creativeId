@@ -269,7 +269,7 @@ def _check_duplicate_faces(self, image_bytes, current_user_id=None):
                     logger.error(f"Error comparing faces: {str(e)}")
                     continue
             
-            return False, ""
+            return False
             
         except serializers.ValidationError:
             raise
