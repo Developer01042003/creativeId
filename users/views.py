@@ -114,9 +114,11 @@ class SubmitKYCView(APIView):
             if serializer.is_valid():
                 kyc = serializer.save(user=request.user)
                 
+                
                 # Update user status
                 request.user.is_submitted = True
                 request.user.is_rejected = False
+                request.user.is_kyc = True
                 request.user.save()
 
                 return Response({
