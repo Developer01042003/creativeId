@@ -103,7 +103,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             logger.error(f"Error in face analysis: {str(e)}")
             raise serializers.ValidationError("Error analyzing face details. Please try again with a clearer photo.")
 
-    def _check_liveness(self, image_bytes):
+def _check_liveness(self, image_bytes):
         try:
             response = rekognition_client.detect_faces(
                 Image={'Bytes': image_bytes},
@@ -144,7 +144,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             logger.error(f"Liveness check error: {str(e)}")
             return True  # More permissive error handling
 
-    def _perform_quality_checks(self, face_details):
+def _perform_quality_checks(self, face_details):
         quality_threshold = 60  # Reduced from 65
         result = {'passed': True, 'message': ''}
 
@@ -164,7 +164,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
         return result
 
-    def _analyze_depth_information(self, face_details):
+def _analyze_depth_information(self, face_details):
         try:
             pose = face_details.get('Pose', {})
             landmarks = face_details.get('Landmarks', [])
@@ -192,7 +192,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             logger.error(f"Depth analysis error: {str(e)}")
             return 0.5
 
-    def _analyze_facial_texture(self, face_details):
+def _analyze_facial_texture(self, face_details):
         try:
             quality = face_details.get('Quality', {})
             texture_scores = []
@@ -400,7 +400,7 @@ def validate_selfie(self, value):
             "Error processing image. Please try again."
         )
 
-    def _compress_image(self, image):
+def _compress_image(self, image):
         try:
             if image.mode != 'RGB':
                 image = image.convert('RGB')
