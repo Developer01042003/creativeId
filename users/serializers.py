@@ -25,7 +25,7 @@ rekognition_client = boto3.client(
     aws_secret_access_key='dodMKF0D9q2oSUip1xn6yF4juck9C6fWaBv8srOM'
 )
 
-S3_BUCKET_NAME = 'imagingkyc'
+S3_BUCKET_NAME = 'imagingkyccc'
 
 class SignupSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
