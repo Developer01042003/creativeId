@@ -103,7 +103,7 @@ class UserKYCSerializer(serializers.ModelSerializer):
             logger.error(f"Error in face analysis: {str(e)}")
             raise serializers.ValidationError("Error analyzing face details. Please try again with a clearer photo.")
 
-    def _check_duplicate_faces(self, image_bytes, current_user_id=None):
+def _check_duplicate_faces(self, image_bytes, current_user_id=None):
     try:
         # Step 1: Initialize Collection with Error Handling
         try:
