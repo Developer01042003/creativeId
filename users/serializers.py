@@ -277,7 +277,7 @@ def _check_duplicate_faces(self, image_bytes, current_user_id=None):
             logger.error(f"Error checking duplicate faces: {str(e)}")
             raise serializers.ValidationError("Error checking for duplicate faces. Please try again.")
 
-    def validate_selfie(self, value)
+    def validate_selfie(self, value):
         try:
             if not isinstance(value, InMemoryUploadedFile):
                 raise serializers.ValidationError("Invalid image format. Please upload a valid image file.")
