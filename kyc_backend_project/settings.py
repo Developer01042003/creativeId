@@ -153,10 +153,10 @@ CORS_ALLOWED_HEADERS = [
 
 import os
 
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_ACCESS_KEY_ID = os.getenv('AKIAUZPNLWACTQ4UERLU')
+AWS_SECRET_ACCESS_KEY = os.getenv('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')
 AWS_STORAGE_BUCKET_NAME = os.getenv('imagingkyc')
-AWS_S3_REGION_NAME = os.getenv('AWS_REGION')
+AWS_S3_REGION_NAME = os.getenv('us-east-1')
 
 # Configure Django to use S3 for static and media files
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
