@@ -211,14 +211,14 @@ class UserKYCSerializer(serializers.ModelSerializer):
 
             # Basic image validations
             width, height = image.size
-            min_dimension = 500  # Increased minimum resolution
+            min_dimension = 200  # Increased minimum resolution
             if width < min_dimension or height < min_dimension:
                 raise serializers.ValidationError(
                     f"Image resolution too low. Minimum {min_dimension}x{min_dimension} pixels required."
                 )
 
             # Check file size (max 5MB)
-            if value.size > 5 * 1024 * 1024:
+            if value.size > 10 * 1024 * 1024:
                 raise serializers.ValidationError("Image size too large. Maximum 5MB allowed.")
 
             # Validate image format
